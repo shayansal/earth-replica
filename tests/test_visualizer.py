@@ -206,3 +206,52 @@ def test_render_preview_html_embeds_genesis_physics_frames(tmp_path):
     assert "updatePhysicsFrame" in html
     assert "Genesis SPH.Liquid" in html
     assert "Genesis MPM.Sand" in html
+
+
+def test_render_preview_html_has_camera_driven_local_physics_bubble(tmp_path):
+    frames_path = tmp_path / "preview.jsonl"
+    output_path = tmp_path / "preview.html"
+    physics_path = tmp_path / "physics.json"
+    frames_path.write_text(
+        json.dumps(
+            {
+                "h3_index": "872830828ffffff",
+                "planet": {"mean_radius_m": 6371008.8},
+                "cell": {
+                    "center_latitude": 37.7749,
+                    "center_longitude": -122.4194,
+                },
+                "step": 1,
+                "time_s": 0.033,
+                "bodies": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    physics_path.write_text(
+        json.dumps(
+            {
+                "schema": "earth-replica/genesis-water-soil-frames/v1",
+                "engine": {"name": "Genesis"},
+                "frames": [
+                    {
+                        "step": 1,
+                        "time_s": 0.033,
+                        "water_particles": [[0.0, 0.0, 0.1]],
+                        "soil_particles": [[0.1, 0.0, 0.0]],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    render_preview_html(frames_path, output_path, physics_path=physics_path)
+    html = output_path.read_text(encoding="utf-8")
+
+    assert "localPhysicsBubble" in html
+    assert "buildLocalPhysicsBubble" in html
+    assert "updateRenderModeFromCamera" in html
+    assert "setRenderMode(\"local-physics\")" in html
+    assert "particleToLocalVector" in html
+    assert "modeValue.textContent = renderModeLabels[activeRenderMode]" in html

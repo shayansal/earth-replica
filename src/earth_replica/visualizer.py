@@ -298,6 +298,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
       <div class="stat"><span>Time</span><strong id="timeValue">0.000s</strong></div>
       <div class="stat"><span>Bodies</span><strong id="bodyCount">0</strong></div>
       <div class="stat"><span>Surface</span><strong id="surfaceStatus">Loading land/water</strong></div>
+      <div class="stat"><span>Mode</span><strong id="modeValue">Global shell</strong></div>
       <div class="stat"><span>Terrain exaggeration</span><strong id="terrainScale">25,000x globe</strong></div>
       <div class="stat"><span>Vertical display</span><strong id="verticalScale">1x local mesh</strong></div>
       <div class="stat"><span>Render Scale</span><strong id="renderScale">1 unit = Earth radius / 3.2</strong></div>
@@ -334,6 +335,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const bodyCount = document.getElementById("bodyCount");
     const earthRadius = document.getElementById("earthRadius");
     const surfaceStatus = document.getElementById("surfaceStatus");
+    const modeValue = document.getElementById("modeValue");
     const terrainScale = document.getElementById("terrainScale");
     const verticalScale = document.getElementById("verticalScale");
     const legend = document.getElementById("legend");
@@ -342,8 +344,16 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const altitudeExaggeration = 120000;
     const terrainExaggeration = 25000;
     const localVerticalExaggeration = 1;
+    const localPhysicsEnterDistance = 8.8;
+    const localPhysicsExitDistance = 14;
+    const renderModeLabels = {
+      global: "Global shell",
+      regional: "Regional stream",
+      "local-physics": "Local physics",
+    };
     let frameIndex = 0;
     let playing = true;
+    let activeRenderMode = "global";
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x05070b);
@@ -432,6 +442,8 @@ _HTML_TEMPLATE = r"""<!doctype html>
     let terrainMesh = null;
     const localTerrainGroup = new THREE.Group();
     scene.add(localTerrainGroup);
+    const localPhysicsBubble = new THREE.Group();
+    scene.add(localPhysicsBubble);
     const physicsGroup = new THREE.Group();
     scene.add(physicsGroup);
     const waterParticleMeshes = [];
@@ -442,6 +454,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
     addKnownSurfaceSamples();
     buildTerrainMesh();
     buildLocalTerrainMesh();
+    buildLocalPhysicsBubble();
     buildPhysicsParticles();
     if (terrainTile && !isGlobalTerrainTile()) {
       enableLocalTerrainMode();
@@ -860,6 +873,57 @@ _HTML_TEMPLATE = r"""<!doctype html>
       localTerrainGroup.userData = { metersToScene, spanM };
     }
 
+    function buildLocalPhysicsBubble() {
+      const soil = new THREE.Mesh(
+        new THREE.PlaneGeometry(9, 9, 64, 64),
+        new THREE.MeshStandardMaterial({
+          color: 0x7d6244,
+          roughness: 0.96,
+          metalness: 0,
+        })
+      );
+      soil.rotation.x = -Math.PI / 2;
+      soil.position.y = -0.025;
+      localPhysicsBubble.add(soil);
+
+      const water = new THREE.Mesh(
+        new THREE.PlaneGeometry(4.8, 3.2, 48, 32),
+        new THREE.MeshPhysicalMaterial({
+          color: 0x2f9fd2,
+          transparent: true,
+          opacity: 0.55,
+          roughness: 0.18,
+          metalness: 0.02,
+          transmission: 0.18,
+          clearcoat: 0.65,
+          clearcoatRoughness: 0.08,
+          side: THREE.DoubleSide,
+        })
+      );
+      water.rotation.x = -Math.PI / 2;
+      water.position.set(-0.75, 0.035, 0.15);
+      localPhysicsBubble.add(water);
+
+      const ridge = new THREE.Mesh(
+        new THREE.BoxGeometry(2.8, 0.16, 0.32),
+        new THREE.MeshStandardMaterial({
+          color: 0x9d8059,
+          roughness: 0.92,
+        })
+      );
+      ridge.position.set(1.25, 0.08, -0.85);
+      ridge.rotation.y = -0.28;
+      localPhysicsBubble.add(ridge);
+
+      const fill = new THREE.HemisphereLight(0xaed8ff, 0x5a4028, 1.2);
+      localPhysicsBubble.add(fill);
+
+      const gridHelper = new THREE.GridHelper(9, 18, 0x5b7f8c, 0x283d42);
+      gridHelper.position.y = 0.001;
+      localPhysicsBubble.add(gridHelper);
+      localPhysicsBubble.visible = false;
+    }
+
     function buildPhysicsParticles() {
       if (!physicsFrames?.frames?.length) {
         physicsGroup.visible = false;
@@ -911,6 +975,10 @@ _HTML_TEMPLATE = r"""<!doctype html>
         if (!particle) {
           return;
         }
+        if (activeRenderMode === "local-physics") {
+          mesh.position.copy(particleToLocalVector(particle));
+          return;
+        }
         const latLon = localMetersToLatLon(cell, particle);
         mesh.position.copy(latLonToVector(
           latLon.latitude,
@@ -918,6 +986,15 @@ _HTML_TEMPLATE = r"""<!doctype html>
           radiusForAltitude(particle[2] + 30)
         ));
       });
+    }
+
+    function particleToLocalVector(particle) {
+      const localScale = 8;
+      return new THREE.Vector3(
+        particle[0] * localScale,
+        particle[2] * localScale + 0.05,
+        -particle[1] * localScale
+      );
     }
 
     function physicsLegendRows() {
@@ -941,6 +1018,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
     }
 
     function enableGlobalTerrainMode() {
+      activeRenderMode = "global";
       earth.visible = false;
       atmosphere.visible = true;
       grid.visible = true;
@@ -950,9 +1028,11 @@ _HTML_TEMPLATE = r"""<!doctype html>
       bodyGroup.visible = false;
       cellMarker.visible = false;
       localTerrainGroup.visible = false;
+      localPhysicsBubble.visible = false;
       physicsGroup.visible = true;
       playing = true;
       playButton.textContent = "Pause";
+      modeValue.textContent = renderModeLabels.global;
       terrainScale.textContent = "ETOPO visual relief";
       verticalScale.textContent = "global bump map";
       controls.autoRotate = true;
@@ -965,6 +1045,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
     }
 
     function enableLocalTerrainMode() {
+      activeRenderMode = "local-physics";
       earth.visible = false;
       atmosphere.visible = false;
       grid.visible = false;
@@ -974,9 +1055,11 @@ _HTML_TEMPLATE = r"""<!doctype html>
       bodyGroup.visible = false;
       cellMarker.visible = false;
       localTerrainGroup.visible = true;
+      localPhysicsBubble.visible = false;
       physicsGroup.visible = false;
       playing = false;
       playButton.textContent = "Inspect";
+      modeValue.textContent = renderModeLabels["local-physics"];
       terrainScale.textContent = "25,000x globe";
       verticalScale.textContent = "1x local mesh";
       controls.autoRotate = false;
@@ -985,6 +1068,68 @@ _HTML_TEMPLATE = r"""<!doctype html>
       controls.target.set(0, 0, 0);
       camera.position.set(0, 3.4, 6.6);
       camera.lookAt(controls.target);
+    }
+
+    function setRenderMode(mode) {
+      if (!renderModeLabels[mode]) {
+        return;
+      }
+      activeRenderMode = mode;
+      modeValue.textContent = renderModeLabels[activeRenderMode];
+      if (mode === "local-physics") {
+        earth.visible = false;
+        atmosphere.visible = false;
+        grid.visible = false;
+        coastlineGroup.visible = false;
+        terrainGroup.visible = false;
+        surfaceGroup.visible = false;
+        bodyGroup.visible = false;
+        cellMarker.visible = false;
+        localTerrainGroup.visible = false;
+        localPhysicsBubble.visible = true;
+        physicsGroup.visible = true;
+        controls.autoRotate = false;
+        controls.minDistance = 2.5;
+        controls.maxDistance = 18;
+        controls.target.set(0, 0, 0);
+        camera.position.set(0, 3.2, 7.4);
+        camera.lookAt(controls.target);
+        terrainScale.textContent = "physics bubble";
+        verticalScale.textContent = "Genesis local";
+        return;
+      }
+      if (mode === "regional") {
+        localPhysicsBubble.visible = false;
+        physicsGroup.visible = Boolean(physicsFrames?.frames?.length);
+        controls.autoRotate = false;
+        modeValue.textContent = renderModeLabels.regional;
+        return;
+      }
+      enableGlobalTerrainMode();
+      modeValue.textContent = renderModeLabels.global;
+    }
+
+    function updateRenderModeFromCamera() {
+      if (!physicsFrames?.frames?.length || !isGlobalTerrainTile()) {
+        return;
+      }
+      const distance = camera.position.distanceTo(controls.target);
+      if (activeRenderMode !== "local-physics" && distance <= localPhysicsEnterDistance) {
+        setRenderMode("local-physics");
+        drawFrame(frameIndex);
+        return;
+      }
+      if (activeRenderMode === "local-physics" && distance >= localPhysicsExitDistance) {
+        setRenderMode("global");
+        drawFrame(frameIndex);
+        return;
+      }
+      if (activeRenderMode === "global" && distance <= 18 && distance > localPhysicsEnterDistance) {
+        setRenderMode("regional");
+      }
+      if (activeRenderMode === "regional" && distance > 22) {
+        setRenderMode("global");
+      }
     }
 
     function terrainColor(elevation) {
@@ -1165,6 +1310,10 @@ _HTML_TEMPLATE = r"""<!doctype html>
       }
       frameLabel.textContent = `Frame ${index + 1} / ${frames.length}`;
       slider.value = String(index);
+      if (activeRenderMode === "local-physics") {
+        legend.innerHTML = `<div class="body-row"><strong style="color:#4cc9ff">Active local physics bubble</strong>Genesis water and soil particles are rendered in a ground-level scene around the camera; zoom out to return to the global visual shell</div>${physicsLegendRows()}`;
+        return;
+      }
       if (terrainTile && isGlobalTerrainTile()) {
         legend.innerHTML = `<div class="body-row"><strong style="color:#b9c36b">Global ETOPO relief mesh</strong>${terrainTile.samples.length.toLocaleString()} ETOPO samples · ${terrainTile.grid.latitude_count} x ${terrainTile.grid.longitude_count} planet grid · ${Number(terrainTile.min_elevation_m).toFixed(1)}m to ${Number(terrainTile.max_elevation_m).toFixed(1)}m · stored 1:1 meters</div><div class="body-row"><strong style="color:#66b7ff">Full Earth view</strong>the globe mesh is built from global elevation and bathymetry samples; vertical relief is exaggerated only for visibility in the browser preview</div>${physicsLegendRows()}<div class="body-row"><strong style="color:#edf5ff">Source</strong>${terrainTile.source.name} · ${terrainTile.source.vertical_datum} · ${terrainTile.source.confidence}</div>`;
         return;
@@ -1212,6 +1361,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
         drawFrame(frameIndex);
       }
       controls.update();
+      updateRenderModeFromCamera();
       renderer.render(scene, camera);
       window.setTimeout(() => window.requestAnimationFrame(tick), 66);
     }
