@@ -62,6 +62,13 @@ python examples/preview_simulation.py --steps 120 --output artifacts/preview.jso
 The generated HTML viewer uses Three.js to render Earth at real WGS84 scale in the data model, with a scaled globe for browser visualization and time playback as the fourth dimension.
 It also loads a Natural Earth land/water mask and renders known elevation/bathymetry samples with meter-based provenance. See [docs/surface-model.md](docs/surface-model.md).
 
+Fetch a real NOAA ETOPO 2022 terrain subset and embed it in the preview:
+
+```bash
+python examples/fetch_etopo_tile.py --min-lat 37.7 --max-lat 37.8 --min-lon -122.5 --max-lon -122.4 --stride 10 --output artifacts/etopo_tile.json
+python examples/preview_simulation.py --steps 120 --output artifacts/preview.jsonl --html artifacts/preview.html --terrain artifacts/etopo_tile.json
+```
+
 Genesis is an optional heavy dependency because it may require platform-specific PyTorch setup. Install it when you are ready to run the simulation sandbox:
 
 ```bash

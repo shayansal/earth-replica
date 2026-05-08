@@ -10,7 +10,12 @@ from earth_replica.demo import build_demo_preview_simulation
 from earth_replica.visualizer import render_preview_html
 
 
-def run_preview(steps: int, output_path: Path, html_path: Path | None = None) -> Path:
+def run_preview(
+    steps: int,
+    output_path: Path,
+    html_path: Path | None = None,
+    terrain_path: Path | None = None,
+) -> Path:
     if steps <= 0:
         raise ValueError("steps must be positive")
 
@@ -24,7 +29,7 @@ def run_preview(steps: int, output_path: Path, html_path: Path | None = None) ->
             handle.write("\n")
 
     if html_path is not None:
-        render_preview_html(output_path, html_path)
+        render_preview_html(output_path, html_path, terrain_path=terrain_path)
 
     return output_path
 
@@ -49,9 +54,20 @@ def main() -> None:
         default=None,
         help="Optional path to write a self-contained HTML animation viewer.",
     )
+    parser.add_argument(
+        "--terrain",
+        type=Path,
+        default=None,
+        help="Optional terrain JSON tile to embed in the HTML viewer.",
+    )
     args = parser.parse_args()
 
-    output_path = run_preview(steps=args.steps, output_path=args.output, html_path=args.html)
+    output_path = run_preview(
+        steps=args.steps,
+        output_path=args.output,
+        html_path=args.html,
+        terrain_path=args.terrain,
+    )
     print(f"Wrote preview frames to {output_path}")
     if args.html is not None:
         print(f"Wrote preview viewer to {args.html}")

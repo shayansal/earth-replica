@@ -11,6 +11,7 @@ from earth_replica.simulation import (
     SimulationFrame,
 )
 from earth_replica.surface import SurfaceSample, SurfaceSource, SurfaceType
+from earth_replica.terrain import TerrainBounds, TerrainSample, TerrainTile
 
 __all__ = [
     "PROJECT",
@@ -27,6 +28,9 @@ __all__ = [
     "SurfaceSample",
     "SurfaceSource",
     "SurfaceType",
+    "TerrainBounds",
+    "TerrainSample",
+    "TerrainTile",
     "build_demo_cell",
     "build_demo_preview_simulation",
 ]

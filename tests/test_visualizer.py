@@ -1,5 +1,6 @@
 import json
 
+from earth_replica.terrain import TerrainBounds, TerrainSample, TerrainTile
 from earth_replica.visualizer import render_preview_html
 
 
@@ -50,8 +51,22 @@ def test_render_preview_html_embeds_frames_and_canvas(tmp_path):
         "\n".join(json.dumps(frame) for frame in frames),
         encoding="utf-8",
     )
+    terrain_path = tmp_path / "terrain.json"
+    terrain_path.write_text(
+        json.dumps(
+            TerrainTile(
+                bounds=TerrainBounds(37.7, 37.8, -122.5, -122.4),
+                stride=10,
+                samples=(
+                    TerrainSample(37.7, -122.5, 10.0),
+                    TerrainSample(37.8, -122.4, 25.0),
+                ),
+            ).to_record()
+        ),
+        encoding="utf-8",
+    )
 
-    returned_path = render_preview_html(frames_path, output_path)
+    returned_path = render_preview_html(frames_path, output_path, terrain_path=terrain_path)
     html = returned_path.read_text(encoding="utf-8")
 
     assert returned_path == output_path
@@ -63,6 +78,8 @@ def test_render_preview_html_embeds_frames_and_canvas(tmp_path):
     assert "6,371,008.8 m" in html
     assert "Challenger Deep" in html
     assert "Mount Everest" in html
+    assert '<script id="terrain-tile-data" type="application/json">' in html
+    assert "NOAA ETOPO 2022 Global Relief Model" in html
     assert '<script id="frames-data" type="application/json">' in html
     assert '<script id="surface-samples-data" type="application/json">' in html
     assert "872830828ffffff" in html

@@ -21,6 +21,19 @@ The Python package includes a starter set of known surface samples:
 
 These samples prove the record shape for known elevation and depth values. They are rendered with visual exaggeration so they are visible on a globe, but the stored values remain real meters.
 
+### Fetched ETOPO Terrain Tiles
+
+`examples/fetch_etopo_tile.py` can fetch a bounded terrain subset from the NOAA ETOPO 2022 ERDDAP endpoint. The resulting JSON stores every returned latitude, longitude, and elevation/depth value in meters. The preview can embed this file and render the fetched samples on the globe.
+
+Example:
+
+```bash
+python examples/fetch_etopo_tile.py --min-lat 37.7 --max-lat 37.8 --min-lon -122.5 --max-lon -122.4 --stride 10 --output artifacts/etopo_tile.json
+python examples/preview_simulation.py --steps 120 --output artifacts/preview.jsonl --html artifacts/preview.html --terrain artifacts/etopo_tile.json
+```
+
+On Windows, the fetcher falls back to PowerShell's native web request path if Python's TLS verifier cannot validate the local certificate chain. It does not disable certificate verification.
+
 ## Target Data Sources
 
 ### NOAA ETOPO 2022

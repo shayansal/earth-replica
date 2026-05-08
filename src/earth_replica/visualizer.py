@@ -19,7 +19,11 @@ def load_preview_frames(frames_path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def render_preview_html(frames_path: Path, output_path: Path) -> Path:
+def render_preview_html(
+    frames_path: Path,
+    output_path: Path,
+    terrain_path: Path | None = None,
+) -> Path:
     frames = load_preview_frames(frames_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame_json = json.dumps(frames, separators=(",", ":")).replace("</", "<\\/")
@@ -27,11 +31,14 @@ def render_preview_html(frames_path: Path, output_path: Path) -> Path:
         "</",
         "<\\/",
     )
+    terrain_json = "null"
+    if terrain_path is not None:
+        terrain_json = terrain_path.read_text(encoding="utf-8").replace("</", "<\\/")
     output_path.write_text(
         _HTML_TEMPLATE.replace("__FRAMES_JSON__", frame_json).replace(
             "__SURFACE_SAMPLES_JSON__",
             surface_json,
-        ),
+        ).replace("__TERRAIN_TILE_JSON__", terrain_json),
         encoding="utf-8",
     )
     return output_path
@@ -298,6 +305,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
 
   <script id="frames-data" type="application/json">__FRAMES_JSON__</script>
   <script id="surface-samples-data" type="application/json">__SURFACE_SAMPLES_JSON__</script>
+  <script id="terrain-tile-data" type="application/json">__TERRAIN_TILE_JSON__</script>
   <script type="module">
     import * as THREE from "three";
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -305,6 +313,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
 
     const frames = JSON.parse(document.getElementById("frames-data").textContent);
     const surfaceSamples = JSON.parse(document.getElementById("surface-samples-data").textContent);
+    const terrainTile = JSON.parse(document.getElementById("terrain-tile-data").textContent);
     const canvas = document.getElementById("scene");
     const slider = document.getElementById("frameSlider");
     const playButton = document.getElementById("playButton");
@@ -401,10 +410,13 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const surfaceGroup = new THREE.Group();
     scene.add(surfaceGroup);
     const surfaceMeshes = [];
+    const terrainGroup = new THREE.Group();
+    scene.add(terrainGroup);
 
     slider.max = Math.max(0, frames.length - 1);
     loadLandWaterTexture();
     addKnownSurfaceSamples();
+    addTerrainTileSamples();
 
     function createBaseEarthTexture() {
       const textureCanvas = document.createElement("canvas");
@@ -560,6 +572,30 @@ _HTML_TEMPLATE = r"""<!doctype html>
       });
     }
 
+    function addTerrainTileSamples() {
+      if (!terrainTile || !Array.isArray(terrainTile.samples)) {
+        return;
+      }
+      terrainTile.samples.forEach((sample) => {
+        const elevation = sample.elevation_m;
+        const color = elevation < 0 ? 0x5fb4ff : elevation < 50 ? 0x79c66d : elevation < 500 ? 0xb9c36b : 0xf1df96;
+        const marker = new THREE.Mesh(
+          new THREE.SphereGeometry(0.018, 12, 8),
+          new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.72,
+          })
+        );
+        marker.position.copy(latLonToVector(
+          sample.latitude,
+          sample.longitude,
+          radiusForTerrainElevation(elevation)
+        ));
+        terrainGroup.add(marker);
+      });
+    }
+
     function addLatitudeLines(group) {
       for (let lat = -60; lat <= 60; lat += 30) {
         const points = [];
@@ -627,6 +663,11 @@ _HTML_TEMPLATE = r"""<!doctype html>
       const earth = frames[0].planet;
       const sign = elevationM < 0 ? 0.28 : 1;
       return renderEarthRadius + (elevationM / earth.mean_radius_m) * renderEarthRadius * altitudeExaggeration * sign;
+    }
+
+    function radiusForTerrainElevation(elevationM) {
+      const earth = frames[0].planet;
+      return renderEarthRadius + (elevationM / earth.mean_radius_m) * renderEarthRadius * altitudeExaggeration * 0.22;
     }
 
     function ensureBodyMesh(name, color) {
@@ -702,6 +743,9 @@ _HTML_TEMPLATE = r"""<!doctype html>
       earthRadius.textContent = `${Number(frame.planet.mean_radius_m).toLocaleString(undefined, { maximumFractionDigits: 1 })} m`;
       timeValue.textContent = `${Number(frame.time_s).toFixed(3)}s`;
       bodyCount.textContent = String(names.length);
+      if (terrainTile) {
+        surfaceStatus.textContent = `${terrainTile.source.name}`;
+      }
       frameLabel.textContent = `Frame ${index + 1} / ${frames.length}`;
       slider.value = String(index);
       legend.innerHTML = names.map((name, i) => {
@@ -712,7 +756,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
         const color = sample.surface_type === "water" ? "#66b7ff" : sample.elevation_m < 0 ? "#ffcf66" : "#d8f27a";
         const depth = sample.depth_m > 0 ? `depth ${Number(sample.depth_m).toLocaleString()}m` : `elevation ${Number(sample.elevation_m).toLocaleString()}m`;
         return `<div class="body-row"><strong style="color:${color}">${sample.name}</strong>${depth} · ${sample.source.confidence} · ${sample.source.name}</div>`;
-      }).join("");
+      }).join("") + (terrainTile ? `<div class="body-row"><strong style="color:#b9c36b">Fetched terrain tile</strong>${terrainTile.samples.length} ETOPO samples · ${Number(terrainTile.min_elevation_m).toFixed(1)}m to ${Number(terrainTile.max_elevation_m).toFixed(1)}m · stride ${terrainTile.stride}</div>` : "");
     }
 
     function resize() {
