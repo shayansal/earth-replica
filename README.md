@@ -96,6 +96,17 @@ python examples/preview_simulation.py --steps 120 --output artifacts/preview.jso
 
 Use `--skip-genesis` for a fast contract-only artifact when iterating on browser rendering.
 
+Build the local exascale stack manifest:
+
+```bash
+python examples/build_planetary_stack_manifest.py --output artifacts/planetary-stack-manifest.json
+```
+
+The manifest describes the data fabric, tile solver plan, local execution backend,
+progressive streaming layers, and governance policy. Each piece is local today but
+uses contracts designed to map to object storage, distributed workers, and live
+sensor ingestion later.
+
 ## Repository Layout
 
 ```text

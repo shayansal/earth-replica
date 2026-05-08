@@ -4,6 +4,18 @@ from earth_replica.cells import CellState, LocalGenesisCell
 from earth_replica.demo import build_demo_cell, build_demo_preview_simulation
 from earth_replica.earth import EARTH_SCALE, EarthScale
 from earth_replica.genesis_worker import GenesisWaterSoilWorker
+from earth_replica.planetary_stack import (
+    AccessPolicy,
+    CoupledSolverPlan,
+    DatasetSource,
+    DistributedExecutionPlan,
+    PlanetaryDataFabric,
+    PlanetaryTile,
+    TileStore,
+    TileStreamManifest,
+    ValidationObservation,
+    ValidationReport,
+)
 from earth_replica.project import PROJECT, EarthReplicaProject, SimulationDomain
 from earth_replica.runtime import (
     ArtifactStore,
@@ -30,10 +42,16 @@ __all__ = [
     "EarthScale",
     "EARTH_SCALE",
     "ArtifactStore",
+    "AccessPolicy",
+    "CoupledSolverPlan",
+    "DatasetSource",
+    "DistributedExecutionPlan",
     "GenesisWaterSoilWorker",
     "LocalGenesisCell",
     "LocalPreviewSimulation",
     "LocalShardScheduler",
+    "PlanetaryDataFabric",
+    "PlanetaryTile",
     "PreviewBody",
     "ShardArtifact",
     "ShardJob",
@@ -45,9 +63,13 @@ __all__ = [
     "SurfaceSample",
     "SurfaceSource",
     "SurfaceType",
+    "TileStore",
+    "TileStreamManifest",
     "TerrainBounds",
     "TerrainSample",
     "TerrainTile",
+    "ValidationObservation",
+    "ValidationReport",
     "WorkerCapabilities",
     "build_demo_cell",
     "build_demo_preview_simulation",
