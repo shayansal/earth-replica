@@ -85,6 +85,17 @@ python examples/genesis_sandbox.py --headless --steps 60
 python examples/genesis_sandbox.py --steps 240
 ```
 
+Run the exascale-shaped local shard runtime. This uses the same shard/job/artifact
+contract we can later point at cloud, Slurm, Kubernetes, or Ray workers, but runs
+one water/soil tile on this machine:
+
+```bash
+python examples/run_local_shard.py --steps 12
+python examples/preview_simulation.py --steps 120 --output artifacts/preview.jsonl --html artifacts/preview.html --terrain artifacts/etopo_global.json --physics artifacts/shards/h3_7_872830828ffffff/<job-id>/genesis-water-soil-frames.json
+```
+
+Use `--skip-genesis` for a fast contract-only artifact when iterating on browser rendering.
+
 ## Repository Layout
 
 ```text

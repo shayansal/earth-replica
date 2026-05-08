@@ -23,6 +23,7 @@ def render_preview_html(
     frames_path: Path,
     output_path: Path,
     terrain_path: Path | None = None,
+    physics_path: Path | None = None,
 ) -> Path:
     frames = load_preview_frames(frames_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -34,11 +35,17 @@ def render_preview_html(
     terrain_json = "null"
     if terrain_path is not None:
         terrain_json = terrain_path.read_text(encoding="utf-8").replace("</", "<\\/")
+    physics_json = "null"
+    if physics_path is not None:
+        physics_json = physics_path.read_text(encoding="utf-8").replace("</", "<\\/")
     output_path.write_text(
         _HTML_TEMPLATE.replace("__FRAMES_JSON__", frame_json).replace(
             "__SURFACE_SAMPLES_JSON__",
             surface_json,
-        ).replace("__TERRAIN_TILE_JSON__", terrain_json),
+        ).replace("__TERRAIN_TILE_JSON__", terrain_json).replace(
+            "__PHYSICS_FRAMES_JSON__",
+            physics_json,
+        ),
         encoding="utf-8",
     )
     return output_path
@@ -308,6 +315,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
   <script id="frames-data" type="application/json">__FRAMES_JSON__</script>
   <script id="surface-samples-data" type="application/json">__SURFACE_SAMPLES_JSON__</script>
   <script id="terrain-tile-data" type="application/json">__TERRAIN_TILE_JSON__</script>
+  <script id="physics-frames-data" type="application/json">__PHYSICS_FRAMES_JSON__</script>
   <script type="module">
     import * as THREE from "three";
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -316,6 +324,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const frames = JSON.parse(document.getElementById("frames-data").textContent);
     const surfaceSamples = JSON.parse(document.getElementById("surface-samples-data").textContent);
     const terrainTile = JSON.parse(document.getElementById("terrain-tile-data").textContent);
+    const physicsFrames = JSON.parse(document.getElementById("physics-frames-data").textContent);
     const canvas = document.getElementById("scene");
     const slider = document.getElementById("frameSlider");
     const playButton = document.getElementById("playButton");
@@ -423,12 +432,17 @@ _HTML_TEMPLATE = r"""<!doctype html>
     let terrainMesh = null;
     const localTerrainGroup = new THREE.Group();
     scene.add(localTerrainGroup);
+    const physicsGroup = new THREE.Group();
+    scene.add(physicsGroup);
+    const waterParticleMeshes = [];
+    const soilParticleMeshes = [];
 
     slider.max = Math.max(0, frames.length - 1);
     loadLandWaterTexture();
     addKnownSurfaceSamples();
     buildTerrainMesh();
     buildLocalTerrainMesh();
+    buildPhysicsParticles();
     if (terrainTile && !isGlobalTerrainTile()) {
       enableLocalTerrainMode();
     }
@@ -846,6 +860,74 @@ _HTML_TEMPLATE = r"""<!doctype html>
       localTerrainGroup.userData = { metersToScene, spanM };
     }
 
+    function buildPhysicsParticles() {
+      if (!physicsFrames?.frames?.length) {
+        physicsGroup.visible = false;
+        return;
+      }
+      const maxWater = Math.max(...physicsFrames.frames.map((frame) => frame.water_particles?.length || 0));
+      const maxSoil = Math.max(...physicsFrames.frames.map((frame) => frame.soil_particles?.length || 0));
+      for (let index = 0; index < maxWater; index += 1) {
+        const mesh = new THREE.Mesh(
+          new THREE.SphereGeometry(0.018, 14, 10),
+          new THREE.MeshStandardMaterial({
+            color: 0x4cc9ff,
+            emissive: 0x126c94,
+            emissiveIntensity: 0.5,
+            transparent: true,
+            opacity: 0.82,
+          })
+        );
+        waterParticleMeshes.push(mesh);
+        physicsGroup.add(mesh);
+      }
+      for (let index = 0; index < maxSoil; index += 1) {
+        const mesh = new THREE.Mesh(
+          new THREE.SphereGeometry(0.016, 12, 8),
+          new THREE.MeshStandardMaterial({
+            color: 0xa9855a,
+            roughness: 0.95,
+            metalness: 0,
+          })
+        );
+        soilParticleMeshes.push(mesh);
+        physicsGroup.add(mesh);
+      }
+    }
+
+    function updatePhysicsFrame(index, cell) {
+      if (!physicsFrames?.frames?.length) {
+        return;
+      }
+      const physicsFrame = physicsFrames.frames[index % physicsFrames.frames.length];
+      updateParticleMeshes(waterParticleMeshes, physicsFrame.water_particles || [], cell);
+      updateParticleMeshes(soilParticleMeshes, physicsFrame.soil_particles || [], cell);
+    }
+
+    function updateParticleMeshes(meshes, particles, cell) {
+      meshes.forEach((mesh, index) => {
+        const particle = particles[index];
+        mesh.visible = Boolean(particle);
+        if (!particle) {
+          return;
+        }
+        const latLon = localMetersToLatLon(cell, particle);
+        mesh.position.copy(latLonToVector(
+          latLon.latitude,
+          latLon.longitude,
+          radiusForAltitude(particle[2] + 30)
+        ));
+      });
+    }
+
+    function physicsLegendRows() {
+      if (!physicsFrames?.frames?.length) {
+        return "";
+      }
+      const firstFrame = physicsFrames.frames[0];
+      return `<div class="body-row"><strong style="color:#4cc9ff">Genesis water/soil shard</strong>${physicsFrames.frames.length} frames · ${firstFrame.water_particles.length} SPH water particles · ${firstFrame.soil_particles.length} MPM soil particles · exascale shard contract</div>`;
+    }
+
     function isGlobalTerrainTile() {
       if (!terrainTile?.bounds) {
         return false;
@@ -868,6 +950,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
       bodyGroup.visible = false;
       cellMarker.visible = false;
       localTerrainGroup.visible = false;
+      physicsGroup.visible = true;
       playing = true;
       playButton.textContent = "Pause";
       terrainScale.textContent = "ETOPO visual relief";
@@ -891,6 +974,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
       bodyGroup.visible = false;
       cellMarker.visible = false;
       localTerrainGroup.visible = true;
+      physicsGroup.visible = false;
       playing = false;
       playButton.textContent = "Inspect";
       terrainScale.textContent = "25,000x globe";
@@ -1070,6 +1154,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
       });
 
       updateTrails(index, names);
+      updatePhysicsFrame(index, cell);
 
       h3Cell.textContent = frame.h3_index;
       earthRadius.textContent = `${Number(frame.planet.mean_radius_m).toLocaleString(undefined, { maximumFractionDigits: 1 })} m`;
@@ -1081,11 +1166,11 @@ _HTML_TEMPLATE = r"""<!doctype html>
       frameLabel.textContent = `Frame ${index + 1} / ${frames.length}`;
       slider.value = String(index);
       if (terrainTile && isGlobalTerrainTile()) {
-        legend.innerHTML = `<div class="body-row"><strong style="color:#b9c36b">Global ETOPO relief mesh</strong>${terrainTile.samples.length.toLocaleString()} ETOPO samples · ${terrainTile.grid.latitude_count} x ${terrainTile.grid.longitude_count} planet grid · ${Number(terrainTile.min_elevation_m).toFixed(1)}m to ${Number(terrainTile.max_elevation_m).toFixed(1)}m · stored 1:1 meters</div><div class="body-row"><strong style="color:#66b7ff">Full Earth view</strong>the globe mesh is built from global elevation and bathymetry samples; vertical relief is exaggerated only for visibility in the browser preview</div><div class="body-row"><strong style="color:#edf5ff">Source</strong>${terrainTile.source.name} · ${terrainTile.source.vertical_datum} · ${terrainTile.source.confidence}</div>`;
+        legend.innerHTML = `<div class="body-row"><strong style="color:#b9c36b">Global ETOPO relief mesh</strong>${terrainTile.samples.length.toLocaleString()} ETOPO samples · ${terrainTile.grid.latitude_count} x ${terrainTile.grid.longitude_count} planet grid · ${Number(terrainTile.min_elevation_m).toFixed(1)}m to ${Number(terrainTile.max_elevation_m).toFixed(1)}m · stored 1:1 meters</div><div class="body-row"><strong style="color:#66b7ff">Full Earth view</strong>the globe mesh is built from global elevation and bathymetry samples; vertical relief is exaggerated only for visibility in the browser preview</div>${physicsLegendRows()}<div class="body-row"><strong style="color:#edf5ff">Source</strong>${terrainTile.source.name} · ${terrainTile.source.vertical_datum} · ${terrainTile.source.confidence}</div>`;
         return;
       }
       if (terrainTile) {
-        legend.innerHTML = `<div class="body-row"><strong style="color:#b9c36b">Fetched terrain mesh</strong>${terrainTile.samples.length} ETOPO samples · ${terrainTile.grid.latitude_count} x ${terrainTile.grid.longitude_count} grid · ${Number(terrainTile.min_elevation_m).toFixed(1)}m to ${Number(terrainTile.max_elevation_m).toFixed(1)}m · stored 1:1 meters · local mesh vertical display ${localVerticalExaggeration}x</div><div class="body-row"><strong style="color:#66b7ff">Sea level water plane</strong>water surface is rendered at 0m; negative terrain values are bathymetry below that plane</div><div class="body-row"><strong style="color:#edf5ff">Source</strong>${terrainTile.source.name} · ${terrainTile.source.vertical_datum} · ${terrainTile.source.confidence}</div>`;
+        legend.innerHTML = `<div class="body-row"><strong style="color:#b9c36b">Fetched terrain mesh</strong>${terrainTile.samples.length} ETOPO samples · ${terrainTile.grid.latitude_count} x ${terrainTile.grid.longitude_count} grid · ${Number(terrainTile.min_elevation_m).toFixed(1)}m to ${Number(terrainTile.max_elevation_m).toFixed(1)}m · stored 1:1 meters · local mesh vertical display ${localVerticalExaggeration}x</div><div class="body-row"><strong style="color:#66b7ff">Sea level water plane</strong>water surface is rendered at 0m; negative terrain values are bathymetry below that plane</div>${physicsLegendRows()}<div class="body-row"><strong style="color:#edf5ff">Source</strong>${terrainTile.source.name} · ${terrainTile.source.vertical_datum} · ${terrainTile.source.confidence}</div>`;
         return;
       }
 
@@ -1093,7 +1178,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
         const body = frame.bodies[name];
         const color = `#${colors[i % colors.length].toString(16).padStart(6, "0")}`;
         return `<div class="body-row"><strong style="color:${color}">${name}</strong>east ${body.position_m[0].toFixed(2)}m · north ${body.position_m[1].toFixed(2)}m · altitude ${body.position_m[2].toFixed(2)}m · vz ${body.velocity_m_s[2].toFixed(2)}m/s</div>`;
-      }).join("") + surfaceSamples.map((sample) => {
+      }).join("") + physicsLegendRows() + surfaceSamples.map((sample) => {
         const color = sample.surface_type === "water" ? "#66b7ff" : sample.elevation_m < 0 ? "#ffcf66" : "#d8f27a";
         const depth = sample.depth_m > 0 ? `depth ${Number(sample.depth_m).toLocaleString()}m` : `elevation ${Number(sample.elevation_m).toLocaleString()}m`;
         return `<div class="body-row"><strong style="color:${color}">${sample.name}</strong>${depth} · ${sample.source.confidence} · ${sample.source.name}</div>`;
