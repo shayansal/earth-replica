@@ -10,6 +10,7 @@ from earth_replica.simulation import (
     SimulationConfig,
     SimulationFrame,
 )
+from earth_replica.surface import SurfaceSample, SurfaceSource, SurfaceType
 
 __all__ = [
     "PROJECT",
@@ -23,6 +24,9 @@ __all__ = [
     "SimulationDomain",
     "SimulationConfig",
     "SimulationFrame",
+    "SurfaceSample",
+    "SurfaceSource",
+    "SurfaceType",
     "build_demo_cell",
     "build_demo_preview_simulation",
 ]

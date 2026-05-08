@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from earth_replica.surface import known_surface_records
+
 
 def load_preview_frames(frames_path: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
@@ -21,8 +23,15 @@ def render_preview_html(frames_path: Path, output_path: Path) -> Path:
     frames = load_preview_frames(frames_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame_json = json.dumps(frames, separators=(",", ":")).replace("</", "<\\/")
+    surface_json = json.dumps(known_surface_records(), separators=(",", ":")).replace(
+        "</",
+        "<\\/",
+    )
     output_path.write_text(
-        _HTML_TEMPLATE.replace("__FRAMES_JSON__", frame_json),
+        _HTML_TEMPLATE.replace("__FRAMES_JSON__", frame_json).replace(
+            "__SURFACE_SAMPLES_JSON__",
+            surface_json,
+        ),
         encoding="utf-8",
     )
     return output_path
@@ -38,7 +47,8 @@ _HTML_TEMPLATE = r"""<!doctype html>
   {
     "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.183.2/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.2/examples/jsm/"
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.2/examples/jsm/",
+      "topojson-client": "https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/+esm"
     }
   }
   </script>
@@ -273,6 +283,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
       <div class="stat"><span>H3 Cell</span><strong id="h3Cell">-</strong></div>
       <div class="stat"><span>Time</span><strong id="timeValue">0.000s</strong></div>
       <div class="stat"><span>Bodies</span><strong id="bodyCount">0</strong></div>
+      <div class="stat"><span>Surface</span><strong id="surfaceStatus">Loading land/water</strong></div>
       <div class="stat"><span>Render Scale</span><strong id="renderScale">1 unit = Earth radius / 3.2</strong></div>
     </div>
   </section>
@@ -286,11 +297,14 @@ _HTML_TEMPLATE = r"""<!doctype html>
   </section>
 
   <script id="frames-data" type="application/json">__FRAMES_JSON__</script>
+  <script id="surface-samples-data" type="application/json">__SURFACE_SAMPLES_JSON__</script>
   <script type="module">
     import * as THREE from "three";
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { feature } from "topojson-client";
 
     const frames = JSON.parse(document.getElementById("frames-data").textContent);
+    const surfaceSamples = JSON.parse(document.getElementById("surface-samples-data").textContent);
     const canvas = document.getElementById("scene");
     const slider = document.getElementById("frameSlider");
     const playButton = document.getElementById("playButton");
@@ -299,6 +313,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const timeValue = document.getElementById("timeValue");
     const bodyCount = document.getElementById("bodyCount");
     const earthRadius = document.getElementById("earthRadius");
+    const surfaceStatus = document.getElementById("surfaceStatus");
     const legend = document.getElementById("legend");
     const colors = [0x55d6be, 0x8fb7ff, 0xffcf66, 0xff8f8f, 0xc6a6ff];
     const renderEarthRadius = 3.2;
@@ -341,12 +356,14 @@ _HTML_TEMPLATE = r"""<!doctype html>
     scene.add(rim);
 
     const earthGeometry = new THREE.SphereGeometry(renderEarthRadius, 96, 48);
+    const earthTexture = createBaseEarthTexture();
     const earthMaterial = new THREE.MeshStandardMaterial({
-      color: 0x1a5e84,
+      color: 0xffffff,
+      map: earthTexture,
       roughness: 0.82,
       metalness: 0.02,
       emissive: 0x061622,
-      emissiveIntensity: 0.38,
+      emissiveIntensity: 0.16,
     });
     const earth = new THREE.Mesh(earthGeometry, earthMaterial);
     scene.add(earth);
@@ -381,8 +398,167 @@ _HTML_TEMPLATE = r"""<!doctype html>
     scene.add(bodyGroup);
     const bodyMeshes = new Map();
     const trailMeshes = new Map();
+    const surfaceGroup = new THREE.Group();
+    scene.add(surfaceGroup);
+    const surfaceMeshes = [];
 
     slider.max = Math.max(0, frames.length - 1);
+    loadLandWaterTexture();
+    addKnownSurfaceSamples();
+
+    function createBaseEarthTexture() {
+      const textureCanvas = document.createElement("canvas");
+      textureCanvas.width = 2048;
+      textureCanvas.height = 1024;
+      const ctx = textureCanvas.getContext("2d");
+      const oceanGradient = ctx.createLinearGradient(0, 0, 0, textureCanvas.height);
+      oceanGradient.addColorStop(0, "#123b68");
+      oceanGradient.addColorStop(0.48, "#0e5d8a");
+      oceanGradient.addColorStop(1, "#08223c");
+      ctx.fillStyle = oceanGradient;
+      ctx.fillRect(0, 0, textureCanvas.width, textureCanvas.height);
+      drawBathymetryBands(ctx, textureCanvas.width, textureCanvas.height);
+      const texture = new THREE.CanvasTexture(textureCanvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = 8;
+      texture.userData.canvas = textureCanvas;
+      texture.userData.context = ctx;
+      return texture;
+    }
+
+    function drawBathymetryBands(ctx, width, height) {
+      ctx.save();
+      ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = "#57a7d8";
+      ctx.lineWidth = 1;
+      for (let lat = -75; lat <= 75; lat += 15) {
+        const y = latitudeToTextureY(lat, height);
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    async function loadLandWaterTexture() {
+      try {
+        const response = await fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json");
+        if (!response.ok) {
+          throw new Error(`land fetch failed: ${response.status}`);
+        }
+        const topology = await response.json();
+        const land = feature(topology, topology.objects.land);
+        drawLandTexture(land);
+        surfaceStatus.textContent = "Natural Earth 110m";
+      } catch (error) {
+        console.warn("Land/water layer failed to load", error);
+        surfaceStatus.textContent = "Ocean fallback";
+      }
+    }
+
+    function drawLandTexture(land) {
+      const textureCanvas = earthTexture.userData.canvas;
+      const ctx = earthTexture.userData.context;
+      ctx.save();
+      ctx.fillStyle = "#4b7f55";
+      ctx.strokeStyle = "#7fcf86";
+      ctx.lineWidth = 1.5;
+      const geometries = land.type === "FeatureCollection"
+        ? land.features.map((item) => item.geometry)
+        : [land.geometry];
+      geometries.forEach((geometry) => drawGeoJsonGeometry(ctx, geometry, textureCanvas.width, textureCanvas.height));
+      ctx.restore();
+      earthTexture.needsUpdate = true;
+      addCoastlineLines(land);
+    }
+
+    function drawGeoJsonGeometry(ctx, geometry, width, height) {
+      if (!geometry) return;
+      if (geometry.type === "Polygon") {
+        drawPolygon(ctx, geometry.coordinates, width, height);
+      }
+      if (geometry.type === "MultiPolygon") {
+        geometry.coordinates.forEach((polygon) => drawPolygon(ctx, polygon, width, height));
+      }
+    }
+
+    function drawPolygon(ctx, rings, width, height) {
+      ctx.beginPath();
+      rings.forEach((ring) => {
+        ring.forEach(([lon, lat], index) => {
+          const x = longitudeToTextureX(lon, width);
+          const y = latitudeToTextureY(lat, height);
+          if (index === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.closePath();
+      });
+      ctx.fill("evenodd");
+      ctx.stroke();
+    }
+
+    function longitudeToTextureX(longitude, width) {
+      return ((longitude + 180) / 360) * width;
+    }
+
+    function latitudeToTextureY(latitude, height) {
+      return ((90 - latitude) / 180) * height;
+    }
+
+    function addCoastlineLines(land) {
+      const material = new THREE.LineBasicMaterial({
+        color: 0x9ce78f,
+        transparent: true,
+        opacity: 0.48,
+      });
+      const geometries = land.type === "FeatureCollection"
+        ? land.features.map((item) => item.geometry)
+        : [land.geometry];
+      geometries.forEach((geometry) => {
+        if (geometry?.type === "Polygon") addPolygonLines(geometry.coordinates, material);
+        if (geometry?.type === "MultiPolygon") {
+          geometry.coordinates.forEach((polygon) => addPolygonLines(polygon, material));
+        }
+      });
+    }
+
+    function addPolygonLines(rings, material) {
+      rings.forEach((ring) => {
+        const points = ring
+          .filter((_, index) => index % 2 === 0)
+          .map(([lon, lat]) => latLonToVector(lat, lon, renderEarthRadius * 1.006));
+        if (points.length < 2) return;
+        const line = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(points),
+          material.clone()
+        );
+        scene.add(line);
+      });
+    }
+
+    function addKnownSurfaceSamples() {
+      surfaceSamples.forEach((sample) => {
+        const isWater = sample.surface_type === "water";
+        const color = isWater ? 0x66b7ff : sample.elevation_m < 0 ? 0xffcf66 : 0xd8f27a;
+        const radius = isWater ? 0.052 : 0.06;
+        const marker = new THREE.Mesh(
+          new THREE.SphereGeometry(radius, 20, 14),
+          new THREE.MeshStandardMaterial({
+            color,
+            emissive: color,
+            emissiveIntensity: 0.62,
+          })
+        );
+        marker.position.copy(latLonToVector(
+          sample.latitude,
+          sample.longitude,
+          radiusForSurfaceElevation(sample.elevation_m)
+        ));
+        surfaceGroup.add(marker);
+        surfaceMeshes.push({ marker, sample });
+      });
+    }
 
     function addLatitudeLines(group) {
       for (let lat = -60; lat <= 60; lat += 30) {
@@ -445,6 +621,12 @@ _HTML_TEMPLATE = r"""<!doctype html>
     function radiusForAltitude(altitudeM) {
       const earth = frames[0].planet;
       return renderEarthRadius + (altitudeM / earth.mean_radius_m) * renderEarthRadius * altitudeExaggeration;
+    }
+
+    function radiusForSurfaceElevation(elevationM) {
+      const earth = frames[0].planet;
+      const sign = elevationM < 0 ? 0.28 : 1;
+      return renderEarthRadius + (elevationM / earth.mean_radius_m) * renderEarthRadius * altitudeExaggeration * sign;
     }
 
     function ensureBodyMesh(name, color) {
@@ -526,6 +708,10 @@ _HTML_TEMPLATE = r"""<!doctype html>
         const body = frame.bodies[name];
         const color = `#${colors[i % colors.length].toString(16).padStart(6, "0")}`;
         return `<div class="body-row"><strong style="color:${color}">${name}</strong>east ${body.position_m[0].toFixed(2)}m · north ${body.position_m[1].toFixed(2)}m · altitude ${body.position_m[2].toFixed(2)}m · vz ${body.velocity_m_s[2].toFixed(2)}m/s</div>`;
+      }).join("") + surfaceSamples.map((sample) => {
+        const color = sample.surface_type === "water" ? "#66b7ff" : sample.elevation_m < 0 ? "#ffcf66" : "#d8f27a";
+        const depth = sample.depth_m > 0 ? `depth ${Number(sample.depth_m).toLocaleString()}m` : `elevation ${Number(sample.elevation_m).toLocaleString()}m`;
+        return `<div class="body-row"><strong style="color:${color}">${sample.name}</strong>${depth} · ${sample.source.confidence} · ${sample.source.name}</div>`;
       }).join("");
     }
 

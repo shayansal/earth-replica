@@ -64,8 +64,9 @@ First target: normalize sensor observations into the same `CellState` shape used
 1. Define an H3 cell state model in Python.
 2. Add a PostGIS/TimescaleDB schema for cells and observations.
 3. Add a Genesis local-cell sandbox that accepts a cell center and extent.
-4. Add a public weather adapter that writes properties onto a cell.
-5. Add Cesium export for cell state and local simulation outputs.
+4. Add a planetary surface layer for land/water, elevation, bathymetry, source metadata, and confidence.
+5. Add a public weather adapter that writes properties onto a cell.
+6. Add Cesium export for cell state and local simulation outputs.
 
 ## Integration Rule
 

@@ -58,7 +58,12 @@ def test_render_preview_html_embeds_frames_and_canvas(tmp_path):
     assert "Earth Replica Preview" in html
     assert '<canvas id="scene"' in html
     assert 'from "three"' in html
+    assert 'from "topojson-client"' in html
+    assert "land-110m.json" in html
     assert "6,371,008.8 m" in html
+    assert "Challenger Deep" in html
+    assert "Mount Everest" in html
     assert '<script id="frames-data" type="application/json">' in html
+    assert '<script id="surface-samples-data" type="application/json">' in html
     assert "872830828ffffff" in html
     assert "probe" in html
