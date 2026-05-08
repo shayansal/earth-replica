@@ -47,6 +47,6 @@
 - Remote: `shayansal/earth-replica`
 
 - [x] **Step 1: Run local verification** with pytest.
-- [ ] **Step 2: Commit scaffold.**
-- [ ] **Step 3: Create public GitHub repo** with the approved description.
-- [ ] **Step 4: Push `main` to GitHub.**
+- [x] **Step 2: Commit scaffold.**
+- [x] **Step 3: Create public GitHub repo** with the approved description.
+- [x] **Step 4: Push `main` to GitHub.**
