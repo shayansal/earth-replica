@@ -59,6 +59,9 @@ def test_preview_frame_exports_json_serializable_record():
     record = simulation.run(steps=1)[0].to_record()
 
     assert record["h3_index"] == "872830828ffffff"
+    assert record["planet"]["mean_radius_m"] == 6_371_008.8
+    assert record["cell"]["center_latitude"] == 37.7749
+    assert record["cell"]["center_longitude"] == -122.4194
     assert record["step"] == 1
     assert record["time_s"] == 0.25
     assert record["bodies"]["probe"]["position_m"][0] == 1.0

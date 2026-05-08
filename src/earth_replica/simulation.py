@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from earth_replica.cells import LocalGenesisCell
+from earth_replica.earth import EARTH_SCALE
 
 Vector3 = tuple[float, float, float]
 
@@ -61,6 +62,7 @@ class SimulationFrame:
     """One time step of local preview output."""
 
     h3_index: str
+    cell: LocalGenesisCell
     step: int
     time_s: float
     bodies: dict[str, PreviewBody]
@@ -68,6 +70,13 @@ class SimulationFrame:
     def to_record(self) -> dict[str, object]:
         return {
             "h3_index": self.h3_index,
+            "planet": EARTH_SCALE.to_record(),
+            "cell": {
+                "center_latitude": self.cell.origin_latitude,
+                "center_longitude": self.cell.origin_longitude,
+                "center_elevation_m": self.cell.origin_elevation_m,
+                "extent_m": self.cell.extent_m,
+            },
             "step": self.step,
             "time_s": self.time_s,
             "bodies": {
@@ -100,6 +109,7 @@ class LocalPreviewSimulation:
             frames.append(
                 SimulationFrame(
                     h3_index=self.local_cell.h3_index,
+                    cell=self.local_cell,
                     step=step_number,
                     time_s=step_number * self.config.time_step_s,
                     bodies=bodies,

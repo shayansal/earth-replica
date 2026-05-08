@@ -9,6 +9,14 @@ def test_render_preview_html_embeds_frames_and_canvas(tmp_path):
     frames = [
         {
             "h3_index": "872830828ffffff",
+            "planet": {
+                "mean_radius_m": 6371008.8,
+                "mean_circumference_m": 40030228.88412017,
+            },
+            "cell": {
+                "center_latitude": 37.7749,
+                "center_longitude": -122.4194,
+            },
             "step": 1,
             "time_s": 0.033,
             "bodies": {
@@ -20,6 +28,14 @@ def test_render_preview_html_embeds_frames_and_canvas(tmp_path):
         },
         {
             "h3_index": "872830828ffffff",
+            "planet": {
+                "mean_radius_m": 6371008.8,
+                "mean_circumference_m": 40030228.88412017,
+            },
+            "cell": {
+                "center_latitude": 37.7749,
+                "center_longitude": -122.4194,
+            },
             "step": 2,
             "time_s": 0.066,
             "bodies": {
@@ -41,6 +57,8 @@ def test_render_preview_html_embeds_frames_and_canvas(tmp_path):
     assert returned_path == output_path
     assert "Earth Replica Preview" in html
     assert '<canvas id="scene"' in html
+    assert 'from "three"' in html
+    assert "6,371,008.8 m" in html
     assert '<script id="frames-data" type="application/json">' in html
     assert "872830828ffffff" in html
     assert "probe" in html
