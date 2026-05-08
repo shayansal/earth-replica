@@ -56,3 +56,13 @@ The first milestone is a local Genesis sandbox plus a clear project contract:
 - Documentation for architecture and physics scope
 
 The next milestone should add a small geospatial state model and one real public data adapter.
+
+## Current Cell-State Bridge
+
+The first bridge between planetary scale and local Genesis simulation is an H3-indexed cell model:
+
+- `CellState` stores a cell id, resolution, center point, observation time, fidelity, elevation, and flexible sensor properties.
+- `LocalGenesisCell` converts that planetary cell into a bounded local scene with a Genesis origin.
+- `db/schema.sql` defines the first PostGIS and TimescaleDB tables for cells and time-indexed observations.
+
+This lets Earth Replica model the planet as many bounded cells, then run local physics inside selected cells.

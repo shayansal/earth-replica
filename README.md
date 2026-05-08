@@ -34,6 +34,7 @@ Earth Replica
 ```
 
 See [docs/architecture.md](docs/architecture.md) and [docs/physics-scope.md](docs/physics-scope.md).
+The first integration map is in [docs/integration-roadmap.md](docs/integration-roadmap.md).
 
 ## Quick Start
 
@@ -65,6 +66,7 @@ python examples/genesis_sandbox.py
 src/earth_replica/        core package metadata and interfaces
 examples/                 runnable experiments and sandboxes
 docs/                     architecture, physics scope, and project plans
+db/                       database schemas for planetary state
 tests/                    executable project contracts
 .github/workflows/        CI checks
 ```
