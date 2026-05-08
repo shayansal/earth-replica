@@ -1,0 +1,86 @@
+# Earth Replica
+
+**Earth Replica** is an open source initiative to create a global 4D live illustration of Earth where physical laws apply and the live state of the planet is simulated through sensor inputs, IoT devices, edge devices, public datasets, and physics engines.
+
+The long-term goal is simple to say and hard to build: make it possible to experience being anywhere on Earth, at any time, from anywhere, and to simulate physical scenarios with transparent, progressively validated fidelity.
+
+This repository is the foundation layer. It starts with a Genesis-backed simulation sandbox, a clear physics scope, and the project structure needed for contributors to add sensor ingestion, geospatial state, rendering, and domain-specific solvers over time.
+
+## What This Is
+
+- A public foundation for a 4D Earth simulation and illustration platform.
+- A place to connect live and historical observations with physical simulation.
+- A progressive-fidelity system: every simulated behavior should state what physical domain it models, what assumptions it makes, and how it can be validated.
+- A Genesis-first Python project for early embodied, material, rigid-body, deformable, fluid, and rendered-world experiments.
+
+## What This Is Not Yet
+
+- It is not a complete replica of Earth.
+- It is not a claim that every physical law can be simulated perfectly at planetary scale.
+- It is not a replacement for weather, climate, CFD, geophysics, or quantum-scale scientific tools.
+
+Earth Replica treats "all physical laws apply" as a north star: a modular architecture where physical domains can be added, tested, coupled, and improved.
+
+## Foundation Architecture
+
+```text
+Earth Replica
+├── observation layer       sensor feeds, IoT, edge devices, public datasets
+├── state layer             geospatial tiles, entities, materials, time-series state
+├── physics layer           Genesis first, specialized solvers over time
+├── assimilation layer      reconcile observations with simulated state
+├── experience layer        render, replay, inspect, and interact with places
+└── validation layer        compare predictions and simulations with real observations
+```
+
+See [docs/architecture.md](docs/architecture.md) and [docs/physics-scope.md](docs/physics-scope.md).
+
+## Quick Start
+
+Create a Python environment with Python 3.10 through 3.13.
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+```
+
+Run the tests:
+
+```bash
+python -m pytest
+```
+
+Genesis is an optional heavy dependency because it may require platform-specific PyTorch setup. Install it when you are ready to run the simulation sandbox:
+
+```bash
+python -m pip install genesis-world
+python examples/genesis_sandbox.py
+```
+
+## Repository Layout
+
+```text
+src/earth_replica/        core package metadata and interfaces
+examples/                 runnable experiments and sandboxes
+docs/                     architecture, physics scope, and project plans
+tests/                    executable project contracts
+.github/workflows/        CI checks
+```
+
+## Contributing Direction
+
+Useful first contributions include:
+
+- Add a small geospatial state tile abstraction.
+- Add a public weather or sensor dataset adapter.
+- Add a Genesis example for a local terrain, rigid body, fluid, or deformable scene.
+- Add validation examples that compare simulated output with observed data.
+- Improve documentation around physics assumptions and limitations.
+
+Every contribution should make its physical assumptions explicit.
+
+## License
+
+MIT License. See [LICENSE](LICENSE).
