@@ -325,6 +325,8 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const bodyCount = document.getElementById("bodyCount");
     const earthRadius = document.getElementById("earthRadius");
     const surfaceStatus = document.getElementById("surfaceStatus");
+    const terrainScale = document.getElementById("terrainScale");
+    const verticalScale = document.getElementById("verticalScale");
     const legend = document.getElementById("legend");
     const colors = [0x55d6be, 0x8fb7ff, 0xffcf66, 0xff8f8f, 0xc6a6ff];
     const renderEarthRadius = 3.2;
@@ -427,8 +429,11 @@ _HTML_TEMPLATE = r"""<!doctype html>
     addKnownSurfaceSamples();
     buildTerrainMesh();
     buildLocalTerrainMesh();
-    if (terrainTile) {
+    if (terrainTile && !isGlobalTerrainTile()) {
       enableLocalTerrainMode();
+    }
+    if (terrainTile && isGlobalTerrainTile()) {
+      enableGlobalTerrainMode();
     }
 
     function createBaseEarthTexture() {
@@ -589,6 +594,10 @@ _HTML_TEMPLATE = r"""<!doctype html>
       if (!terrainTile?.grid) {
         return;
       }
+      if (isGlobalTerrainTile()) {
+        buildGlobalTerrainMesh();
+        return;
+      }
       const { latitudes, longitudes, elevation_rows_m: elevations } = terrainTile.grid;
       const positions = [];
       const colors = [];
@@ -638,8 +647,8 @@ _HTML_TEMPLATE = r"""<!doctype html>
           vertexColors: true,
           roughness: 0.92,
           metalness: 0.0,
-          transparent: true,
-          opacity: 0.86,
+          transparent: !isGlobalTerrainTile(),
+          opacity: isGlobalTerrainTile() ? 1 : 0.86,
           side: THREE.DoubleSide,
         })
       );
@@ -659,8 +668,91 @@ _HTML_TEMPLATE = r"""<!doctype html>
       terrainGroup.add(outline);
     }
 
+    function buildGlobalTerrainMesh() {
+      const { longitude_count: longitudeCount, latitude_count: latitudeCount } = terrainTile.grid;
+      const widthSegments = Math.max(48, Math.min(longitudeCount - 1, 240));
+      const heightSegments = Math.max(24, Math.min(latitudeCount - 1, 120));
+      const { colorTexture, displacementTexture } = createGlobalTerrainTextures();
+      const geometry = new THREE.SphereGeometry(renderEarthRadius, widthSegments, heightSegments);
+      terrainMesh = new THREE.Mesh(
+        geometry,
+        new THREE.MeshStandardMaterial({
+          map: colorTexture,
+          displacementMap: displacementTexture,
+          displacementScale: 0.18,
+          displacementBias: -0.07,
+          bumpMap: displacementTexture,
+          bumpScale: 0.045,
+          roughness: 0.9,
+          metalness: 0,
+        })
+      );
+      terrainGroup.add(terrainMesh);
+    }
+
+    function createGlobalTerrainTextures() {
+      const { latitudes, longitudes, elevation_rows_m: elevations } = terrainTile.grid;
+      const colorCanvas = document.createElement("canvas");
+      colorCanvas.width = longitudes.length;
+      colorCanvas.height = latitudes.length;
+      const displacementCanvas = document.createElement("canvas");
+      displacementCanvas.width = colorCanvas.width;
+      displacementCanvas.height = colorCanvas.height;
+      const colorCtx = colorCanvas.getContext("2d");
+      const displacementCtx = displacementCanvas.getContext("2d");
+      const elevationSpan = Math.max(
+        terrainTile.max_elevation_m - terrainTile.min_elevation_m,
+        1
+      );
+
+      latitudes.forEach((_, latIndex) => {
+        const y = latitudes.length - latIndex - 1;
+        longitudes.forEach((_, lonIndex) => {
+          const elevation = elevations[latIndex][lonIndex];
+          const colorValue = terrainColor(elevation);
+          colorCtx.fillStyle = `#${colorValue.toString(16).padStart(6, "0")}`;
+          colorCtx.fillRect(lonIndex, y, 1, 1);
+
+          const normalized = Math.round(
+            ((elevation - terrainTile.min_elevation_m) / elevationSpan) * 255
+          );
+          displacementCtx.fillStyle = `rgb(${normalized}, ${normalized}, ${normalized})`;
+          displacementCtx.fillRect(lonIndex, y, 1, 1);
+        });
+      });
+
+      const colorTexture = new THREE.CanvasTexture(colorCanvas);
+      colorTexture.colorSpace = THREE.SRGBColorSpace;
+      colorTexture.anisotropy = 8;
+      colorTexture.wrapS = THREE.RepeatWrapping;
+      colorTexture.needsUpdate = true;
+
+      const displacementTexture = new THREE.CanvasTexture(displacementCanvas);
+      displacementTexture.wrapS = THREE.RepeatWrapping;
+      displacementTexture.needsUpdate = true;
+      return { colorTexture, displacementTexture };
+    }
+
+    function nearestElevation(latitude, longitude) {
+      const { latitudes, longitudes, elevation_rows_m: elevations } = terrainTile.grid;
+      const latIndex = nearestIndex(latitudes, latitude);
+      const lonIndex = nearestIndex(longitudes, longitude);
+      return elevations[latIndex][lonIndex];
+    }
+
+    function nearestIndex(values, value) {
+      if (values.length < 2) {
+        return 0;
+      }
+      const first = values[0];
+      const last = values[values.length - 1];
+      const fraction = (value - first) / (last - first);
+      const index = Math.round(fraction * (values.length - 1));
+      return Math.max(0, Math.min(values.length - 1, index));
+    }
+
     function buildLocalTerrainMesh() {
-      if (!terrainTile?.grid) {
+      if (!terrainTile?.grid || isGlobalTerrainTile()) {
         return;
       }
       const { latitudes, longitudes, elevation_rows_m: elevations } = terrainTile.grid;
@@ -754,6 +846,41 @@ _HTML_TEMPLATE = r"""<!doctype html>
       localTerrainGroup.userData = { metersToScene, spanM };
     }
 
+    function isGlobalTerrainTile() {
+      if (!terrainTile?.bounds) {
+        return false;
+      }
+      return (
+        terrainTile.bounds.min_latitude <= -89.5 &&
+        terrainTile.bounds.max_latitude >= 88 &&
+        terrainTile.bounds.min_longitude <= -179.5 &&
+        terrainTile.bounds.max_longitude >= 178
+      );
+    }
+
+    function enableGlobalTerrainMode() {
+      earth.visible = false;
+      atmosphere.visible = true;
+      grid.visible = true;
+      coastlineGroup.visible = true;
+      terrainGroup.visible = true;
+      surfaceGroup.visible = false;
+      bodyGroup.visible = false;
+      cellMarker.visible = false;
+      localTerrainGroup.visible = false;
+      playing = true;
+      playButton.textContent = "Pause";
+      terrainScale.textContent = "ETOPO visual relief";
+      verticalScale.textContent = "global bump map";
+      controls.autoRotate = true;
+      controls.minDistance = 7.2;
+      controls.maxDistance = 80;
+      controls.target.set(0, 0, 0);
+      camera.position.set(0, 2.8, 48);
+      camera.lookAt(controls.target);
+      controls.update();
+    }
+
     function enableLocalTerrainMode() {
       earth.visible = false;
       atmosphere.visible = false;
@@ -766,7 +893,11 @@ _HTML_TEMPLATE = r"""<!doctype html>
       localTerrainGroup.visible = true;
       playing = false;
       playButton.textContent = "Inspect";
+      terrainScale.textContent = "25,000x globe";
+      verticalScale.textContent = "1x local mesh";
       controls.autoRotate = false;
+      controls.minDistance = 1.6;
+      controls.maxDistance = 14;
       controls.target.set(0, 0, 0);
       camera.position.set(0, 3.4, 6.6);
       camera.lookAt(controls.target);
@@ -949,6 +1080,10 @@ _HTML_TEMPLATE = r"""<!doctype html>
       }
       frameLabel.textContent = `Frame ${index + 1} / ${frames.length}`;
       slider.value = String(index);
+      if (terrainTile && isGlobalTerrainTile()) {
+        legend.innerHTML = `<div class="body-row"><strong style="color:#b9c36b">Global ETOPO relief mesh</strong>${terrainTile.samples.length.toLocaleString()} ETOPO samples · ${terrainTile.grid.latitude_count} x ${terrainTile.grid.longitude_count} planet grid · ${Number(terrainTile.min_elevation_m).toFixed(1)}m to ${Number(terrainTile.max_elevation_m).toFixed(1)}m · stored 1:1 meters</div><div class="body-row"><strong style="color:#66b7ff">Full Earth view</strong>the globe mesh is built from global elevation and bathymetry samples; vertical relief is exaggerated only for visibility in the browser preview</div><div class="body-row"><strong style="color:#edf5ff">Source</strong>${terrainTile.source.name} · ${terrainTile.source.vertical_datum} · ${terrainTile.source.confidence}</div>`;
+        return;
+      }
       if (terrainTile) {
         legend.innerHTML = `<div class="body-row"><strong style="color:#b9c36b">Fetched terrain mesh</strong>${terrainTile.samples.length} ETOPO samples · ${terrainTile.grid.latitude_count} x ${terrainTile.grid.longitude_count} grid · ${Number(terrainTile.min_elevation_m).toFixed(1)}m to ${Number(terrainTile.max_elevation_m).toFixed(1)}m · stored 1:1 meters · local mesh vertical display ${localVerticalExaggeration}x</div><div class="body-row"><strong style="color:#66b7ff">Sea level water plane</strong>water surface is rendered at 0m; negative terrain values are bathymetry below that plane</div><div class="body-row"><strong style="color:#edf5ff">Source</strong>${terrainTile.source.name} · ${terrainTile.source.vertical_datum} · ${terrainTile.source.confidence}</div>`;
         return;

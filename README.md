@@ -62,7 +62,14 @@ python examples/preview_simulation.py --steps 120 --output artifacts/preview.jso
 The generated HTML viewer uses Three.js to render Earth at real WGS84 scale in the data model, with a scaled globe for browser visualization and time playback as the fourth dimension.
 It also loads a Natural Earth land/water mask and renders known elevation/bathymetry samples with meter-based provenance. See [docs/surface-model.md](docs/surface-model.md).
 
-Fetch a real NOAA ETOPO 2022 terrain subset and embed it in the preview:
+Fetch a coarse global NOAA ETOPO 2022 relief grid and embed it in the preview:
+
+```bash
+python -c "from pathlib import Path; from earth_replica.terrain import TerrainBounds, fetch_etopo_tile; tile=fetch_etopo_tile(TerrainBounds(-90,90,-180,180), stride=360, timeout_s=360); tile.write_json(Path('artifacts/etopo_global.json'))"
+python examples/preview_simulation.py --steps 120 --output artifacts/preview.jsonl --html artifacts/preview.html --terrain artifacts/etopo_global.json
+```
+
+Fetch a local higher-resolution ETOPO 2022 terrain subset and embed it in the preview:
 
 ```bash
 python examples/fetch_etopo_tile.py --min-lat 37.7 --max-lat 37.8 --min-lon -122.5 --max-lon -122.4 --stride 10 --output artifacts/etopo_tile.json
