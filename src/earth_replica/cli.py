@@ -7,9 +7,10 @@ import json
 from pathlib import Path
 
 from earth_replica.demo import build_demo_preview_simulation
+from earth_replica.visualizer import render_preview_html
 
 
-def run_preview(steps: int, output_path: Path) -> Path:
+def run_preview(steps: int, output_path: Path, html_path: Path | None = None) -> Path:
     if steps <= 0:
         raise ValueError("steps must be positive")
 
@@ -21,6 +22,9 @@ def run_preview(steps: int, output_path: Path) -> Path:
         for frame in frames:
             handle.write(json.dumps(frame.to_record(), sort_keys=True))
             handle.write("\n")
+
+    if html_path is not None:
+        render_preview_html(output_path, html_path)
 
     return output_path
 
@@ -39,10 +43,18 @@ def main() -> None:
         default=Path("artifacts/preview.jsonl"),
         help="Path to write JSONL simulation frames.",
     )
+    parser.add_argument(
+        "--html",
+        type=Path,
+        default=None,
+        help="Optional path to write a self-contained HTML animation viewer.",
+    )
     args = parser.parse_args()
 
-    output_path = run_preview(steps=args.steps, output_path=args.output)
+    output_path = run_preview(steps=args.steps, output_path=args.output, html_path=args.html)
     print(f"Wrote preview frames to {output_path}")
+    if args.html is not None:
+        print(f"Wrote preview viewer to {args.html}")
 
 
 if __name__ == "__main__":
