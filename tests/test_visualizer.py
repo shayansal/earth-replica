@@ -59,6 +59,8 @@ def test_render_preview_html_embeds_frames_and_canvas(tmp_path):
                 stride=10,
                 samples=(
                     TerrainSample(37.7, -122.5, 10.0),
+                    TerrainSample(37.7, -122.4, 20.0),
+                    TerrainSample(37.8, -122.5, 15.0),
                     TerrainSample(37.8, -122.4, 25.0),
                 ),
             ).to_record()
@@ -80,6 +82,12 @@ def test_render_preview_html_embeds_frames_and_canvas(tmp_path):
     assert "Mount Everest" in html
     assert '<script id="terrain-tile-data" type="application/json">' in html
     assert "NOAA ETOPO 2022 Global Relief Model" in html
+    assert "buildTerrainMesh" in html
+    assert "buildLocalTerrainMesh" in html
+    assert "Vertical display" in html
+    assert "Terrain exaggeration" in html
+    assert 'bodyCount.textContent = terrainTile ? "hidden" : String(names.length)' in html
+    assert "if (!terrainTile) {\n      focusTerrainTile();" in html
     assert '<script id="frames-data" type="application/json">' in html
     assert '<script id="surface-samples-data" type="application/json">' in html
     assert "872830828ffffff" in html

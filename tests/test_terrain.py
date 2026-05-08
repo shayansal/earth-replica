@@ -51,6 +51,8 @@ def test_terrain_tile_exports_json_record():
         stride=10,
         samples=(
             TerrainSample(latitude=0.0, longitude=10.0, elevation_m=-5.0),
+            TerrainSample(latitude=0.0, longitude=11.0, elevation_m=3.0),
+            TerrainSample(latitude=1.0, longitude=10.0, elevation_m=7.0),
             TerrainSample(latitude=1.0, longitude=11.0, elevation_m=20.0),
         ),
     )
@@ -60,5 +62,26 @@ def test_terrain_tile_exports_json_record():
     assert record["bounds"]["min_latitude"] == 0.0
     assert record["min_elevation_m"] == -5.0
     assert record["max_elevation_m"] == 20.0
-    assert record["samples"][1]["elevation_m"] == 20.0
+    assert record["grid"]["latitude_count"] == 2
+    assert record["grid"]["longitude_count"] == 2
+    assert record["grid"]["elevation_rows_m"] == [[-5.0, 3.0], [7.0, 20.0]]
+    assert record["samples"][3]["elevation_m"] == 20.0
     assert record["source"]["confidence"] == "integrated source grid"
+
+
+def test_terrain_tile_rejects_samples_that_do_not_form_grid():
+    tile = TerrainTile(
+        bounds=TerrainBounds(0.0, 1.0, 10.0, 11.0),
+        stride=10,
+        samples=(
+            TerrainSample(latitude=0.0, longitude=10.0, elevation_m=-5.0),
+            TerrainSample(latitude=1.0, longitude=11.0, elevation_m=20.0),
+        ),
+    )
+
+    try:
+        tile.grid_record()
+    except ValueError as exc:
+        assert "complete latitude/longitude grid" in str(exc)
+    else:
+        raise AssertionError("Expected incomplete terrain grid to raise")

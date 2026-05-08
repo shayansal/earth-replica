@@ -87,6 +87,43 @@ class TerrainTile:
     def max_elevation_m(self) -> float:
         return max(sample.elevation_m for sample in self.samples)
 
+    @property
+    def latitudes(self) -> tuple[float, ...]:
+        return tuple(sorted({sample.latitude for sample in self.samples}))
+
+    @property
+    def longitudes(self) -> tuple[float, ...]:
+        return tuple(sorted({sample.longitude for sample in self.samples}))
+
+    def grid_record(self) -> dict[str, object]:
+        latitudes = self.latitudes
+        longitudes = self.longitudes
+        by_coordinate = {
+            (sample.latitude, sample.longitude): sample.elevation_m
+            for sample in self.samples
+        }
+        expected_count = len(latitudes) * len(longitudes)
+        if expected_count != len(self.samples):
+            raise ValueError("Terrain samples must form a complete latitude/longitude grid")
+
+        elevation_rows = []
+        for latitude in latitudes:
+            row = []
+            for longitude in longitudes:
+                coordinate = (latitude, longitude)
+                if coordinate not in by_coordinate:
+                    raise ValueError("Terrain samples must form a complete latitude/longitude grid")
+                row.append(by_coordinate[coordinate])
+            elevation_rows.append(row)
+
+        return {
+            "latitudes": list(latitudes),
+            "longitudes": list(longitudes),
+            "latitude_count": len(latitudes),
+            "longitude_count": len(longitudes),
+            "elevation_rows_m": elevation_rows,
+        }
+
     def to_record(self) -> dict[str, object]:
         return {
             "bounds": self.bounds.to_record(),
@@ -94,6 +131,7 @@ class TerrainTile:
             "source": self.source.to_record(),
             "min_elevation_m": self.min_elevation_m,
             "max_elevation_m": self.max_elevation_m,
+            "grid": self.grid_record(),
             "samples": [sample.to_record() for sample in self.samples],
         }
 

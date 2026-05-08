@@ -291,6 +291,8 @@ _HTML_TEMPLATE = r"""<!doctype html>
       <div class="stat"><span>Time</span><strong id="timeValue">0.000s</strong></div>
       <div class="stat"><span>Bodies</span><strong id="bodyCount">0</strong></div>
       <div class="stat"><span>Surface</span><strong id="surfaceStatus">Loading land/water</strong></div>
+      <div class="stat"><span>Terrain exaggeration</span><strong id="terrainScale">25,000x globe</strong></div>
+      <div class="stat"><span>Vertical display</span><strong id="verticalScale">1x local mesh</strong></div>
       <div class="stat"><span>Render Scale</span><strong id="renderScale">1 unit = Earth radius / 3.2</strong></div>
     </div>
   </section>
@@ -327,6 +329,8 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const colors = [0x55d6be, 0x8fb7ff, 0xffcf66, 0xff8f8f, 0xc6a6ff];
     const renderEarthRadius = 3.2;
     const altitudeExaggeration = 120000;
+    const terrainExaggeration = 25000;
+    const localVerticalExaggeration = 1;
     let frameIndex = 0;
     let playing = true;
 
@@ -381,6 +385,8 @@ _HTML_TEMPLATE = r"""<!doctype html>
     addLatitudeLines(grid);
     addLongitudeLines(grid);
     scene.add(grid);
+    const coastlineGroup = new THREE.Group();
+    scene.add(coastlineGroup);
 
     const atmosphere = new THREE.Mesh(
       new THREE.SphereGeometry(renderEarthRadius * 1.018, 96, 48),
@@ -412,11 +418,18 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const surfaceMeshes = [];
     const terrainGroup = new THREE.Group();
     scene.add(terrainGroup);
+    let terrainMesh = null;
+    const localTerrainGroup = new THREE.Group();
+    scene.add(localTerrainGroup);
 
     slider.max = Math.max(0, frames.length - 1);
     loadLandWaterTexture();
     addKnownSurfaceSamples();
-    addTerrainTileSamples();
+    buildTerrainMesh();
+    buildLocalTerrainMesh();
+    if (terrainTile) {
+      enableLocalTerrainMode();
+    }
 
     function createBaseEarthTexture() {
       const textureCanvas = document.createElement("canvas");
@@ -545,7 +558,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
           new THREE.BufferGeometry().setFromPoints(points),
           material.clone()
         );
-        scene.add(line);
+        coastlineGroup.add(line);
       });
     }
 
@@ -572,28 +585,216 @@ _HTML_TEMPLATE = r"""<!doctype html>
       });
     }
 
-    function addTerrainTileSamples() {
-      if (!terrainTile || !Array.isArray(terrainTile.samples)) {
+    function buildTerrainMesh() {
+      if (!terrainTile?.grid) {
         return;
       }
-      terrainTile.samples.forEach((sample) => {
-        const elevation = sample.elevation_m;
-        const color = elevation < 0 ? 0x5fb4ff : elevation < 50 ? 0x79c66d : elevation < 500 ? 0xb9c36b : 0xf1df96;
-        const marker = new THREE.Mesh(
-          new THREE.SphereGeometry(0.018, 12, 8),
-          new THREE.MeshBasicMaterial({
-            color,
-            transparent: true,
-            opacity: 0.72,
-          })
-        );
-        marker.position.copy(latLonToVector(
-          sample.latitude,
-          sample.longitude,
-          radiusForTerrainElevation(elevation)
-        ));
-        terrainGroup.add(marker);
+      const { latitudes, longitudes, elevation_rows_m: elevations } = terrainTile.grid;
+      const positions = [];
+      const colors = [];
+      const indices = [];
+      const color = new THREE.Color();
+
+      latitudes.forEach((latitude, latIndex) => {
+        longitudes.forEach((longitude, lonIndex) => {
+          const elevation = elevations[latIndex][lonIndex];
+          const point = latLonToVector(
+            latitude,
+            longitude,
+            radiusForTerrainElevation(elevation)
+          );
+          positions.push(point.x, point.y, point.z);
+          color.set(terrainColor(elevation));
+          colors.push(color.r, color.g, color.b);
+        });
       });
+
+      const width = longitudes.length;
+      for (let latIndex = 0; latIndex < latitudes.length - 1; latIndex += 1) {
+        for (let lonIndex = 0; lonIndex < longitudes.length - 1; lonIndex += 1) {
+          const a = latIndex * width + lonIndex;
+          const b = a + 1;
+          const c = (latIndex + 1) * width + lonIndex;
+          const d = c + 1;
+          indices.push(a, c, b, b, c, d);
+        }
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(positions, 3)
+      );
+      geometry.setAttribute(
+        "color",
+        new THREE.Float32BufferAttribute(colors, 3)
+      );
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+
+      terrainMesh = new THREE.Mesh(
+        geometry,
+        new THREE.MeshStandardMaterial({
+          vertexColors: true,
+          roughness: 0.92,
+          metalness: 0.0,
+          transparent: true,
+          opacity: 0.86,
+          side: THREE.DoubleSide,
+        })
+      );
+      terrainGroup.add(terrainMesh);
+
+      const outline = makeLine(
+        [
+          latLonToVector(latitudes[0], longitudes[0], renderEarthRadius * 1.012),
+          latLonToVector(latitudes[0], longitudes[longitudes.length - 1], renderEarthRadius * 1.012),
+          latLonToVector(latitudes[latitudes.length - 1], longitudes[longitudes.length - 1], renderEarthRadius * 1.012),
+          latLonToVector(latitudes[latitudes.length - 1], longitudes[0], renderEarthRadius * 1.012),
+          latLonToVector(latitudes[0], longitudes[0], renderEarthRadius * 1.012),
+        ],
+        0xffcf66,
+        0.85
+      );
+      terrainGroup.add(outline);
+    }
+
+    function buildLocalTerrainMesh() {
+      if (!terrainTile?.grid) {
+        return;
+      }
+      const { latitudes, longitudes, elevation_rows_m: elevations } = terrainTile.grid;
+      const centerLat = (terrainTile.bounds.min_latitude + terrainTile.bounds.max_latitude) / 2;
+      const centerLon = (terrainTile.bounds.min_longitude + terrainTile.bounds.max_longitude) / 2;
+      const earthRadiusM = frames[0].planet.mean_radius_m;
+      const eastings = longitudes.map((longitude) => (
+        THREE.MathUtils.degToRad(longitude - centerLon) *
+        earthRadiusM *
+        Math.cos(THREE.MathUtils.degToRad(centerLat))
+      ));
+      const northings = latitudes.map((latitude) => (
+        THREE.MathUtils.degToRad(latitude - centerLat) * earthRadiusM
+      ));
+      const spanM = Math.max(
+        Math.max(...eastings) - Math.min(...eastings),
+        Math.max(...northings) - Math.min(...northings),
+        1
+      );
+      const metersToScene = 7 / spanM;
+      const positions = [];
+      const colors = [];
+      const indices = [];
+      const color = new THREE.Color();
+
+      latitudes.forEach((_, latIndex) => {
+        longitudes.forEach((_, lonIndex) => {
+          const elevation = elevations[latIndex][lonIndex];
+          positions.push(
+            eastings[lonIndex] * metersToScene,
+            elevation * metersToScene * localVerticalExaggeration,
+            -northings[latIndex] * metersToScene
+          );
+          color.set(terrainColor(elevation));
+          colors.push(color.r, color.g, color.b);
+        });
+      });
+
+      const width = longitudes.length;
+      for (let latIndex = 0; latIndex < latitudes.length - 1; latIndex += 1) {
+        for (let lonIndex = 0; lonIndex < longitudes.length - 1; lonIndex += 1) {
+          const a = latIndex * width + lonIndex;
+          const b = a + 1;
+          const c = (latIndex + 1) * width + lonIndex;
+          const d = c + 1;
+          indices.push(a, c, b, b, c, d);
+        }
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+
+      const mesh = new THREE.Mesh(
+        geometry,
+        new THREE.MeshStandardMaterial({
+          vertexColors: true,
+          roughness: 0.88,
+          metalness: 0,
+          side: THREE.DoubleSide,
+        })
+      );
+      localTerrainGroup.add(mesh);
+
+      const waterGeometry = new THREE.PlaneGeometry(
+        (Math.max(...eastings) - Math.min(...eastings)) * metersToScene,
+        (Math.max(...northings) - Math.min(...northings)) * metersToScene,
+        1,
+        1
+      );
+      const water = new THREE.Mesh(
+        waterGeometry,
+        new THREE.MeshStandardMaterial({
+          color: 0x267db8,
+          transparent: true,
+          opacity: 0.42,
+          roughness: 0.6,
+          metalness: 0.05,
+          side: THREE.DoubleSide,
+        })
+      );
+      water.rotation.x = -Math.PI / 2;
+      water.position.y = 0;
+      localTerrainGroup.add(water);
+
+      const gridHelper = new THREE.GridHelper(7.4, 12, 0x456070, 0x233644);
+      gridHelper.position.y = -0.015;
+      localTerrainGroup.add(gridHelper);
+      localTerrainGroup.userData = { metersToScene, spanM };
+    }
+
+    function enableLocalTerrainMode() {
+      earth.visible = false;
+      atmosphere.visible = false;
+      grid.visible = false;
+      coastlineGroup.visible = false;
+      terrainGroup.visible = false;
+      surfaceGroup.visible = false;
+      bodyGroup.visible = false;
+      cellMarker.visible = false;
+      localTerrainGroup.visible = true;
+      playing = false;
+      playButton.textContent = "Inspect";
+      controls.autoRotate = false;
+      controls.target.set(0, 0, 0);
+      camera.position.set(0, 3.4, 6.6);
+      camera.lookAt(controls.target);
+    }
+
+    function terrainColor(elevation) {
+      if (elevation < -4000) return 0x072e63;
+      if (elevation < -1000) return 0x135c9c;
+      if (elevation < 0) return 0x4ca8d8;
+      if (elevation < 50) return 0x71a85c;
+      if (elevation < 500) return 0x9da85f;
+      if (elevation < 2000) return 0xc8b06d;
+      return 0xf2e4bb;
+    }
+
+    function focusTerrainTile() {
+      if (!terrainTile?.bounds) {
+        return;
+      }
+      const centerLat = (terrainTile.bounds.min_latitude + terrainTile.bounds.max_latitude) / 2;
+      const centerLon = (terrainTile.bounds.min_longitude + terrainTile.bounds.max_longitude) / 2;
+      const target = latLonToVector(centerLat, centerLon, renderEarthRadius);
+      controls.target.copy(target.clone().multiplyScalar(0.7));
+      camera.position.copy(
+        target.clone().normalize().multiplyScalar(renderEarthRadius + 2.4)
+      );
+      camera.position.y += 0.6;
+      camera.lookAt(controls.target);
     }
 
     function addLatitudeLines(group) {
@@ -667,7 +868,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
 
     function radiusForTerrainElevation(elevationM) {
       const earth = frames[0].planet;
-      return renderEarthRadius + (elevationM / earth.mean_radius_m) * renderEarthRadius * altitudeExaggeration * 0.22;
+      return renderEarthRadius + (elevationM / earth.mean_radius_m) * renderEarthRadius * terrainExaggeration;
     }
 
     function ensureBodyMesh(name, color) {
@@ -742,12 +943,17 @@ _HTML_TEMPLATE = r"""<!doctype html>
       h3Cell.textContent = frame.h3_index;
       earthRadius.textContent = `${Number(frame.planet.mean_radius_m).toLocaleString(undefined, { maximumFractionDigits: 1 })} m`;
       timeValue.textContent = `${Number(frame.time_s).toFixed(3)}s`;
-      bodyCount.textContent = String(names.length);
+      bodyCount.textContent = terrainTile ? "hidden" : String(names.length);
       if (terrainTile) {
         surfaceStatus.textContent = `${terrainTile.source.name}`;
       }
       frameLabel.textContent = `Frame ${index + 1} / ${frames.length}`;
       slider.value = String(index);
+      if (terrainTile) {
+        legend.innerHTML = `<div class="body-row"><strong style="color:#b9c36b">Fetched terrain mesh</strong>${terrainTile.samples.length} ETOPO samples · ${terrainTile.grid.latitude_count} x ${terrainTile.grid.longitude_count} grid · ${Number(terrainTile.min_elevation_m).toFixed(1)}m to ${Number(terrainTile.max_elevation_m).toFixed(1)}m · stored 1:1 meters · local mesh vertical display ${localVerticalExaggeration}x</div><div class="body-row"><strong style="color:#66b7ff">Sea level water plane</strong>water surface is rendered at 0m; negative terrain values are bathymetry below that plane</div><div class="body-row"><strong style="color:#edf5ff">Source</strong>${terrainTile.source.name} · ${terrainTile.source.vertical_datum} · ${terrainTile.source.confidence}</div>`;
+        return;
+      }
+
       legend.innerHTML = names.map((name, i) => {
         const body = frame.bodies[name];
         const color = `#${colors[i % colors.length].toString(16).padStart(6, "0")}`;
@@ -756,7 +962,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
         const color = sample.surface_type === "water" ? "#66b7ff" : sample.elevation_m < 0 ? "#ffcf66" : "#d8f27a";
         const depth = sample.depth_m > 0 ? `depth ${Number(sample.depth_m).toLocaleString()}m` : `elevation ${Number(sample.elevation_m).toLocaleString()}m`;
         return `<div class="body-row"><strong style="color:${color}">${sample.name}</strong>${depth} · ${sample.source.confidence} · ${sample.source.name}</div>`;
-      }).join("") + (terrainTile ? `<div class="body-row"><strong style="color:#b9c36b">Fetched terrain tile</strong>${terrainTile.samples.length} ETOPO samples · ${Number(terrainTile.min_elevation_m).toFixed(1)}m to ${Number(terrainTile.max_elevation_m).toFixed(1)}m · stride ${terrainTile.stride}</div>` : "");
+      }).join("");
     }
 
     function resize() {
@@ -792,6 +998,9 @@ _HTML_TEMPLATE = r"""<!doctype html>
 
     resize();
     drawFrame(frameIndex);
+    if (!terrainTile) {
+      focusTerrainTile();
+    }
     tick();
   </script>
 </body>
