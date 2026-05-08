@@ -1,12 +1,25 @@
 """Earth Replica public package surface."""
 
 from earth_replica.cells import CellState, LocalGenesisCell
+from earth_replica.demo import build_demo_cell, build_demo_preview_simulation
 from earth_replica.project import PROJECT, EarthReplicaProject, SimulationDomain
+from earth_replica.simulation import (
+    LocalPreviewSimulation,
+    PreviewBody,
+    SimulationConfig,
+    SimulationFrame,
+)
 
 __all__ = [
     "PROJECT",
     "CellState",
     "EarthReplicaProject",
     "LocalGenesisCell",
+    "LocalPreviewSimulation",
+    "PreviewBody",
     "SimulationDomain",
+    "SimulationConfig",
+    "SimulationFrame",
+    "build_demo_cell",
+    "build_demo_preview_simulation",
 ]

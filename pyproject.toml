@@ -41,6 +41,9 @@ dev = ["pytest>=8.0"]
 Homepage = "https://github.com/shayansal/earth-replica"
 Repository = "https://github.com/shayansal/earth-replica"
 
+[project.scripts]
+earth-replica = "earth_replica.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

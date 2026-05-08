@@ -53,11 +53,19 @@ Run the tests:
 python -m pytest
 ```
 
+Run the dependency-light local preview loop:
+
+```bash
+python examples/preview_simulation.py --steps 120 --output artifacts/preview.jsonl
+```
+
 Genesis is an optional heavy dependency because it may require platform-specific PyTorch setup. Install it when you are ready to run the simulation sandbox:
 
 ```bash
 python -m pip install genesis-world
-python examples/genesis_sandbox.py
+$env:PYTHONUTF8 = "1"
+python examples/genesis_sandbox.py --headless --steps 60
+python examples/genesis_sandbox.py --steps 240
 ```
 
 ## Repository Layout

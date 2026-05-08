@@ -8,30 +8,26 @@ Install Genesis before running:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import argparse
 
-from earth_replica import PROJECT, CellState, LocalGenesisCell
-
-
-def build_demo_cell() -> LocalGenesisCell:
-    cell = CellState(
-        h3_index="872830828ffffff",
-        resolution=7,
-        latitude=37.7749,
-        longitude=-122.4194,
-        elevation_m=12.5,
-        observed_at=datetime.now(UTC),
-        fidelity="interactive",
-        properties={
-            "label": "San Francisco demo cell",
-            "terrain": "flat placeholder",
-            "source": "example",
-        },
-    )
-    return LocalGenesisCell.from_cell_state(cell, extent_m=250.0)
+from earth_replica import PROJECT, build_demo_cell
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the Genesis local-cell sandbox.")
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run without opening the Genesis viewer.",
+    )
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=240,
+        help="Number of Genesis simulation steps to run.",
+    )
+    args = parser.parse_args()
+
     try:
         import genesis as gs
     except ImportError as exc:
@@ -43,7 +39,7 @@ def main() -> None:
     gs.init(backend=gs.cpu)
 
     local_cell = build_demo_cell()
-    scene = gs.Scene(show_viewer=True)
+    scene = gs.Scene(show_viewer=not args.headless)
     scene.add_entity(gs.morphs.Plane())
     scene.add_entity(
         gs.morphs.Box(
@@ -62,8 +58,10 @@ def main() -> None:
         f"{local_cell.h3_index} over {local_cell.extent_m} meters."
     )
 
-    for _ in range(240):
+    for _ in range(args.steps):
         scene.step()
+
+    print(f"Completed {args.steps} Genesis steps.")
 
 
 if __name__ == "__main__":
