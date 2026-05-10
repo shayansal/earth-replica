@@ -162,13 +162,15 @@ class OpenTileWorker:
         genesis_patch_path = tile_root / "genesis-terrain-patch.json"
         terrain_texture_path = tile_root / terrain_texture_uri if terrain_texture_uri else None
         facade_texture_path = tile_root / facade_texture_uri if facade_texture_uri else None
+        render_buildings = _buildings_outside_water(buildings, water)
+        buildings_skipped_in_water = len(buildings) - len(render_buildings)
 
         mesh_metrics: dict[str, int] = {}
         glb_path.write_bytes(
             _build_glb(
                 request,
                 terrain,
-                buildings,
+                render_buildings,
                 roads,
                 water,
                 mesh_metrics,
@@ -203,7 +205,9 @@ class OpenTileWorker:
             genesis_patch_path=genesis_patch_path,
             metrics={
                 **mesh_metrics,
-                "building_features": len(buildings),
+                "building_features": len(render_buildings),
+                "observed_building_features": len(buildings),
+                "buildings_skipped_in_water": buildings_skipped_in_water,
                 "road_features": len(roads),
                 "water_features": len(water),
             },
@@ -371,6 +375,47 @@ def _soil_classes(land_cover: dict[str, float]) -> dict[str, float]:
     }
 
 
+def _buildings_outside_water(
+    buildings: tuple[OpenFeature, ...],
+    water: tuple[OpenFeature, ...],
+) -> tuple[OpenFeature, ...]:
+    water_polygons = tuple(_open_polygon_ring(feature.geometry) for feature in water if len(feature.geometry) >= 3)
+    if not water_polygons:
+        return buildings
+    renderable = []
+    for building in buildings:
+        centroid = _feature_centroid(building.geometry)
+        if any(_point_in_polygon(centroid, polygon) for polygon in water_polygons):
+            continue
+        renderable.append(building)
+    return tuple(renderable)
+
+
+def _feature_centroid(points: tuple[tuple[float, float], ...]) -> tuple[float, float]:
+    ring = _open_polygon_ring(points)
+    count = len(ring) or 1
+    return (
+        sum(point[0] for point in ring) / count,
+        sum(point[1] for point in ring) / count,
+    )
+
+
+def _point_in_polygon(point: tuple[float, float], polygon: tuple[tuple[float, float], ...]) -> bool:
+    if len(polygon) < 3:
+        return False
+    x, y = point
+    inside = False
+    previous_x, previous_y = polygon[-1]
+    for current_x, current_y in polygon:
+        crosses = (current_y > y) != (previous_y > y)
+        if crosses:
+            slope_x = (previous_x - current_x) * (y - current_y) / ((previous_y - current_y) or 1e-12) + current_x
+            if x < slope_x:
+                inside = not inside
+        previous_x, previous_y = current_x, current_y
+    return inside
+
+
 def _build_glb(
     request: OpenTileRequest,
     terrain: TerrainTile,
@@ -396,6 +441,8 @@ def _build_glb(
     metrics["terrain_textured"] = 1 if terrain_texture_uri else 0
     metrics["roof_textured"] = 1 if terrain_texture_uri and builder.primitive_indices.get(4) else 0
     metrics["facade_textured"] = 1 if facade_texture_uri and builder.primitive_indices.get(1) else 0
+    metrics["building_roof_triangles"] = builder.building_roof_triangles
+    metrics["building_wall_quads"] = builder.building_wall_quads
     return builder.to_glb(terrain_texture_uri=terrain_texture_uri, facade_texture_uri=facade_texture_uri)
 
 
@@ -413,6 +460,8 @@ class _MeshBuilder:
             4: [],
         }
         self.terrain_vertices = 0
+        self.building_roof_triangles = 0
+        self.building_wall_quads = 0
 
     def add_terrain(self, terrain: TerrainTile) -> None:
         latitudes = terrain.latitudes
@@ -443,24 +492,43 @@ class _MeshBuilder:
         self.terrain_vertices = len(latitudes) * len(longitudes)
 
     def add_building(self, feature: OpenFeature) -> None:
-        if len(feature.geometry) < 3:
+        footprint = _open_polygon_ring(feature.geometry)
+        if len(footprint) < 3:
             return
-        footprint = feature.geometry[:4]
         base = [self._local(lon, lat, 0.1) for lon, lat in footprint]
-        if len(base) == 3:
-            base.append(base[-1])
-            footprint = (*footprint, footprint[-1])
         top = [(x, y, z + max(feature.height_m, 3.0)) for x, y, z in base]
-        self._add_quad(base, material_index=1)
+        roof_center = _centroid3(top)
+        roof_center_uv = _terrain_uv(
+            self.request.bounds,
+            sum(point[0] for point in footprint) / len(footprint),
+            sum(point[1] for point in footprint) / len(footprint),
+        )
         roof_texcoords = [_terrain_uv(self.request.bounds, lon, lat) for lon, lat in footprint]
-        self._add_quad(list(reversed(top)), material_index=4, texcoords=list(reversed(roof_texcoords)))
-        for index in range(4):
+        is_counter_clockwise = _signed_area_xy(top) > 0
+        for index in range(len(top)):
+            next_index = (index + 1) % len(top)
+            if is_counter_clockwise:
+                self._add_triangle(
+                    [roof_center, top[index], top[next_index]],
+                    material_index=4,
+                    texcoords=[roof_center_uv, roof_texcoords[index], roof_texcoords[next_index]],
+                )
+            else:
+                self._add_triangle(
+                    [roof_center, top[next_index], top[index]],
+                    material_index=4,
+                    texcoords=[roof_center_uv, roof_texcoords[next_index], roof_texcoords[index]],
+                )
+            self.building_roof_triangles += 1
+        for index in range(len(base)):
+            next_index = (index + 1) % len(base)
             self._add_quad([
                 base[index],
-                base[(index + 1) % 4],
-                top[(index + 1) % 4],
+                base[next_index],
+                top[next_index],
                 top[index],
             ], material_index=1)
+            self.building_wall_quads += 1
 
     def add_polyline_strip(self, feature: OpenFeature, height_m: float) -> None:
         if len(feature.geometry) < 2:
@@ -501,6 +569,19 @@ class _MeshBuilder:
         for point, texcoord in zip(points, quad_texcoords):
             self._add_vertex(point, normal, texcoord)
         self.primitive_indices[material_index].extend([start, start + 1, start + 2, start, start + 2, start + 3])
+
+    def _add_triangle(
+        self,
+        points: list[tuple[float, float, float]],
+        material_index: int,
+        texcoords: list[tuple[float, float]] | None = None,
+    ) -> None:
+        normal = _normal(points[0], points[1], points[2])
+        start = len(self.positions)
+        triangle_texcoords = texcoords or [(0.5, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        for point, texcoord in zip(points, triangle_texcoords):
+            self._add_vertex(point, normal, texcoord)
+        self.primitive_indices[material_index].extend([start, start + 1, start + 2])
 
     def _add_vertex(
         self,
@@ -658,6 +739,36 @@ def _terrain_uv(bounds: TerrainBounds, longitude: float, latitude: float) -> tup
     return (max(0.0, min(1.0, u)), max(0.0, min(1.0, v)))
 
 
+def _open_polygon_ring(points: tuple[tuple[float, float], ...]) -> tuple[tuple[float, float], ...]:
+    ring = list(points)
+    if len(ring) > 1 and ring[0] == ring[-1]:
+        ring.pop()
+    deduped: list[tuple[float, float]] = []
+    for point in ring:
+        if not deduped or point != deduped[-1]:
+            deduped.append(point)
+    if len(deduped) > 1 and deduped[0] == deduped[-1]:
+        deduped.pop()
+    return tuple(deduped)
+
+
+def _centroid3(points: list[tuple[float, float, float]]) -> tuple[float, float, float]:
+    count = len(points) or 1
+    return (
+        sum(point[0] for point in points) / count,
+        sum(point[1] for point in points) / count,
+        sum(point[2] for point in points) / count,
+    )
+
+
+def _signed_area_xy(points: list[tuple[float, float, float]]) -> float:
+    area = 0.0
+    for index, point in enumerate(points):
+        next_point = points[(index + 1) % len(points)]
+        area += point[0] * next_point[1] - next_point[0] * point[1]
+    return area / 2
+
+
 def _gltf_materials(
     terrain_texture_index: int | None = None,
     facade_texture_index: int | None = None,
@@ -691,6 +802,7 @@ def _gltf_materials(
         {
             "name": "inferred building facades",
             "pbrMetallicRoughness": facade_pbr,
+            "doubleSided": True,
         },
         {
             "name": "observed roads",

@@ -71,9 +71,9 @@ def test_golden_tile_pipeline_fetches_measured_sources_and_writes_quality_manife
             layer="water",
             geometry=(
                 (bounds.min_longitude, bounds.min_latitude),
-                (bounds.max_longitude, bounds.min_latitude),
-                (bounds.max_longitude, bounds.max_latitude),
-                (bounds.min_longitude, bounds.max_latitude),
+                ((bounds.min_longitude + bounds.max_longitude) / 2, bounds.min_latitude),
+                ((bounds.min_longitude + bounds.max_longitude) / 2, (bounds.min_latitude + bounds.max_latitude) / 2),
+                (bounds.min_longitude, (bounds.min_latitude + bounds.max_latitude) / 2),
             ),
             provenance=ProvenanceRecord(
                 source_id="osm:way:water-1",
@@ -253,6 +253,127 @@ def test_open_tile_glb_uses_distinct_material_primitives_for_physical_layers(tmp
     assert result.metrics["terrain_textured"] == 1
     assert result.metrics["roof_textured"] == 1
     assert result.metrics["facade_textured"] == 1
+
+
+def test_open_tile_glb_preserves_full_building_footprint_for_roofs_and_facades(tmp_path):
+    from earth_replica.open_tile_pipeline import OpenFeature, OpenTileRequest, OpenTileWorker, ProvenanceRecord
+
+    request = OpenTileRequest(
+        h3_index="872830828ffffff",
+        resolution=7,
+        center_latitude=37.7749,
+        center_longitude=-122.4194,
+        bounds=TerrainBounds(37.77, 37.78, -122.43, -122.41),
+    )
+    terrain = TerrainTile(
+        bounds=request.bounds,
+        stride=1,
+        samples=(
+            TerrainSample(37.77, -122.43, 1.0),
+            TerrainSample(37.77, -122.41, 3.0),
+            TerrainSample(37.78, -122.43, 4.0),
+            TerrainSample(37.78, -122.41, 8.0),
+        ),
+    )
+    provenance = ProvenanceRecord(
+        source_id="source:building",
+        source_name="test",
+        domain="buildings",
+        state="observed",
+        license="test",
+        resolution="fixture",
+    )
+    pentagon = OpenFeature(
+        feature_id="building-pentagon",
+        layer="buildings",
+        geometry=(
+            (-122.4230, 37.7720),
+            (-122.4216, 37.7721),
+            (-122.4212, 37.7730),
+            (-122.4220, 37.7738),
+            (-122.4232, 37.7730),
+        ),
+        height_m=22.0,
+        provenance=provenance,
+    )
+
+    result = OpenTileWorker(output_root=tmp_path).run(
+        request=request,
+        terrain=terrain,
+        buildings=(pentagon,),
+        terrain_texture_uri="tile-imagery.jpg",
+        facade_texture_uri="facade-atlas.png",
+    )
+
+    gltf = _read_glb_json(result.glb_path.read_bytes())
+    primitives = gltf["meshes"][0]["primitives"]
+    roof = next(primitive for primitive in primitives if primitive["material"] == 4)
+    facade = next(primitive for primitive in primitives if primitive["material"] == 1)
+
+    assert gltf["accessors"][roof["indices"]]["count"] == 15
+    assert gltf["accessors"][facade["indices"]]["count"] == 30
+    assert result.metrics["building_roof_triangles"] == 5
+    assert result.metrics["building_wall_quads"] == 5
+
+
+def test_open_tile_worker_skips_building_extrusions_centered_in_water(tmp_path):
+    from earth_replica.open_tile_pipeline import OpenFeature, OpenTileRequest, OpenTileWorker, ProvenanceRecord
+
+    request = OpenTileRequest(
+        h3_index="872830828ffffff",
+        resolution=7,
+        center_latitude=37.7749,
+        center_longitude=-122.4194,
+        bounds=TerrainBounds(37.77, 37.78, -122.43, -122.41),
+    )
+    terrain = TerrainTile(
+        bounds=request.bounds,
+        stride=1,
+        samples=(
+            TerrainSample(37.77, -122.43, 1.0),
+            TerrainSample(37.77, -122.41, 3.0),
+            TerrainSample(37.78, -122.43, 4.0),
+            TerrainSample(37.78, -122.41, 8.0),
+        ),
+    )
+    provenance = ProvenanceRecord(
+        source_id="source:water-test",
+        source_name="test",
+        domain="test",
+        state="observed",
+        license="test",
+        resolution="fixture",
+    )
+    building = OpenFeature(
+        feature_id="building-in-water",
+        layer="buildings",
+        geometry=((-122.424, 37.772), (-122.422, 37.772), (-122.422, 37.774), (-122.424, 37.774)),
+        height_m=18.0,
+        provenance=provenance,
+    )
+    water = OpenFeature(
+        feature_id="water-covering-building",
+        layer="water",
+        geometry=((-122.425, 37.771), (-122.421, 37.771), (-122.421, 37.775), (-122.425, 37.775)),
+        provenance=provenance,
+    )
+
+    result = OpenTileWorker(output_root=tmp_path).run(
+        request=request,
+        terrain=terrain,
+        buildings=(building,),
+        water=(water,),
+        terrain_texture_uri="tile-imagery.jpg",
+        facade_texture_uri="facade-atlas.png",
+    )
+
+    gltf = _read_glb_json(result.glb_path.read_bytes())
+    materials = {primitive["material"] for primitive in gltf["meshes"][0]["primitives"]}
+
+    assert 1 not in materials
+    assert 4 not in materials
+    assert result.metrics["building_features"] == 0
+    assert result.metrics["buildings_skipped_in_water"] == 1
 
 
 def test_fetch_imagery_falls_back_to_windows_trust_store_for_certificate_errors(monkeypatch):
