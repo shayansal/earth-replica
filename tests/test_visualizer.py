@@ -85,6 +85,16 @@ def test_render_preview_html_embeds_frames_and_maplibre_globe(tmp_path):
     assert "Local Context" in html
     assert "global-building-shells" in html
     assert '"source-layer": "building"' in html
+    assert '<script id="semantic-layer-data" type="application/json">' in html
+    assert "semantic-water" in html
+    assert "semantic-roads" in html
+    assert "semantic-forest" in html
+    assert "semantic-snow-ice" in html
+    assert "semantic-desert-sand" in html
+    assert "semantic-farmland" in html
+    assert "semantic-urban" in html
+    assert "semantic-wetland" in html
+    assert "semantic-layer-data" in html
     assert "Global untextured building shells" in html
     assert "1:1 physical data model" in html
     assert "mean_radius_m" in html
@@ -148,6 +158,7 @@ def test_render_preview_html_supports_global_terrain_mode(tmp_path):
     assert "World_Imagery" in html
     assert "physics-context-fill" in html
     assert "Whole-globe first" in html
+    assert "Semantic material layers" in html
     assert "streamed satellite imagery" in html
     assert "NOAA ETOPO 2022 Global Relief Model" in html
 

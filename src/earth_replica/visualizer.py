@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from earth_replica.semantic_layers import semantic_surface_manifest
 from earth_replica.surface import known_surface_records
 
 
@@ -37,6 +38,10 @@ def render_preview_html(
         "</",
         "<\\/",
     )
+    semantic_layer_json = json.dumps(semantic_surface_manifest(), separators=(",", ":")).replace(
+        "</",
+        "<\\/",
+    )
     terrain_json = "null"
     if terrain_path is not None:
         terrain_json = terrain_path.read_text(encoding="utf-8").replace("</", "<\\/")
@@ -50,6 +55,9 @@ def render_preview_html(
         ).replace("__TERRAIN_TILE_JSON__", terrain_json).replace(
             "__PHYSICS_FRAMES_JSON__",
             physics_json,
+        ).replace(
+            "__SEMANTIC_LAYER_JSON__",
+            semantic_layer_json,
         )
     if renderer == "maplibre":
         html = html.replace(
@@ -290,11 +298,13 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
 
   <script id="frames-data" type="application/json">__FRAMES_JSON__</script>
   <script id="surface-samples-data" type="application/json">__SURFACE_SAMPLES_JSON__</script>
+  <script id="semantic-layer-data" type="application/json">__SEMANTIC_LAYER_JSON__</script>
   <script id="terrain-tile-data" type="application/json">__TERRAIN_TILE_JSON__</script>
   <script id="physics-frames-data" type="application/json">__PHYSICS_FRAMES_JSON__</script>
   <script>
     const frames = JSON.parse(document.getElementById("frames-data").textContent);
     const surfaceSamples = JSON.parse(document.getElementById("surface-samples-data").textContent);
+    const semanticLayerManifest = JSON.parse(document.getElementById("semantic-layer-data").textContent);
     const terrainTile = JSON.parse(document.getElementById("terrain-tile-data").textContent);
     const physicsFrames = JSON.parse(document.getElementById("physics-frames-data").textContent);
     const maptilerApiKey = __MAPTILER_API_KEY_JSON__;
@@ -339,6 +349,7 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
     };
     if (buildingSource) {
       styleSources.globalBuildings = buildingSource;
+      styleSources.semanticSurface = buildingSource;
     }
     const styleLayers = [
       { id: "satellite", type: "raster", source: "satellite" },
@@ -360,30 +371,8 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
       },
     ];
     if (buildingSource) {
-      styleLayers.push({
-        id: "global-building-shells",
-        type: "fill-extrusion",
-        source: "globalBuildings",
-        "source-layer": "building",
-        minzoom: 12,
-        paint: {
-          "fill-extrusion-color": "#d8d6cc",
-          "fill-extrusion-opacity": 0.64,
-          "fill-extrusion-height": [
-            "coalesce",
-            ["to-number", ["get", "render_height"]],
-            ["to-number", ["get", "height"]],
-            ["*", ["to-number", ["get", "levels"]], 3.2],
-            6,
-          ],
-          "fill-extrusion-base": [
-            "coalesce",
-            ["to-number", ["get", "render_min_height"]],
-            ["to-number", ["get", "min_height"]],
-            0,
-          ],
-        },
-      });
+      styleLayers.push(...semanticMaterialLayers());
+      styleLayers.push(globalBuildingShellLayer());
     }
 
     const map = new maplibregl.Map({
@@ -470,6 +459,7 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
       document.getElementById("legend").innerHTML =
         `<div class="body-row"><strong>Whole-globe first</strong>The camera starts centered on Earth, with the local physics context available only when you ask for it.</div>` +
         `<div class="body-row"><strong>Global untextured building shells</strong>${hasMapTiler ? "MapTiler/OpenMapTiles vector buildings stream globally as plain fill-extrusions with no facade imagery or satellite texture applied to the walls." : "Add an open vector building tile source to stream global building shells."}</div>` +
+        `<div class="body-row"><strong>Semantic material layers</strong>${semanticLayerManifest.layers.length} separate material/provenance layers for water, roads, forest, snow/ice, desert/sand, farmland, urban surface, parks/grass, and wetlands.</div>` +
         `<div class="body-row"><strong>1:1 physical data model</strong>Earth radius is kept at ${formatMeters(planetRadiusM)} in simulation metadata while MapLibre handles the camera-scaled globe.</div>` +
         `<div class="body-row"><strong>Physical context</strong>Physics is represented as georeferenced surface context, not floating particles. Genesis output is reserved for surface effects such as water, soil wetness, erosion, and deformation.</div>` +
         physicsRow +
@@ -481,6 +471,128 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
 
     function formatMeters(value) {
       return `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 1 })} m`;
+    }
+
+    function semanticMaterialLayers() {
+      return [
+        semanticFillLayer({
+          id: "semantic-water",
+          sourceLayer: "water",
+          color: "#1d6f9f",
+          opacity: 0.46,
+          minzoom: 0,
+        }),
+        semanticFillLayer({
+          id: "semantic-forest",
+          sourceLayer: "landcover",
+          color: "#1f6b3b",
+          opacity: 0.34,
+          filter: ["in", ["get", "class"], ["literal", ["wood", "forest", "tree", "scrub"]]],
+        }),
+        semanticFillLayer({
+          id: "semantic-park-grass",
+          sourceLayer: "park",
+          color: "#6fae5f",
+          opacity: 0.26,
+          minzoom: 5,
+        }),
+        semanticFillLayer({
+          id: "semantic-farmland",
+          sourceLayer: "landuse",
+          color: "#b7a95a",
+          opacity: 0.25,
+          filter: ["in", ["get", "class"], ["literal", ["farmland", "farm", "orchard", "vineyard", "crop"]]],
+        }),
+        semanticFillLayer({
+          id: "semantic-desert-sand",
+          sourceLayer: "landcover",
+          color: "#c9b06d",
+          opacity: 0.28,
+          filter: ["in", ["get", "class"], ["literal", ["sand", "desert", "dune", "bare_rock"]]],
+        }),
+        semanticFillLayer({
+          id: "semantic-snow-ice",
+          sourceLayer: "landcover",
+          color: "#e6f3ff",
+          opacity: 0.52,
+          filter: ["in", ["get", "class"], ["literal", ["ice", "snow", "glacier"]]],
+        }),
+        semanticFillLayer({
+          id: "semantic-wetland",
+          sourceLayer: "landcover",
+          color: "#4f8d7c",
+          opacity: 0.28,
+          filter: ["in", ["get", "class"], ["literal", ["wetland", "marsh", "swamp", "mangrove"]]],
+        }),
+        semanticFillLayer({
+          id: "semantic-urban",
+          sourceLayer: "landuse",
+          color: "#9a9690",
+          opacity: 0.22,
+          filter: ["in", ["get", "class"], ["literal", ["residential", "commercial", "industrial", "retail"]]],
+        }),
+        {
+          id: "semantic-roads",
+          type: "line",
+          source: "semanticSurface",
+          "source-layer": "transportation",
+          minzoom: 6,
+          paint: {
+            "line-color": "#eee5d5",
+            "line-opacity": 0.78,
+            "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              6, 0.35,
+              10, 0.9,
+              14, 3.4,
+            ],
+          },
+        },
+      ];
+    }
+
+    function semanticFillLayer({ id, sourceLayer, color, opacity, filter = true, minzoom = 3 }) {
+      return {
+        id,
+        type: "fill",
+        source: "semanticSurface",
+        "source-layer": sourceLayer,
+        minzoom,
+        filter,
+        paint: {
+          "fill-color": color,
+          "fill-opacity": opacity,
+        },
+      };
+    }
+
+    function globalBuildingShellLayer() {
+      return {
+        id: "global-building-shells",
+        type: "fill-extrusion",
+        source: "globalBuildings",
+        "source-layer": "building",
+        minzoom: 12,
+        paint: {
+          "fill-extrusion-color": "#d8d6cc",
+          "fill-extrusion-opacity": 0.64,
+          "fill-extrusion-height": [
+            "coalesce",
+            ["to-number", ["get", "render_height"]],
+            ["to-number", ["get", "height"]],
+            ["*", ["to-number", ["get", "levels"]], 3.2],
+            6,
+          ],
+          "fill-extrusion-base": [
+            "coalesce",
+            ["to-number", ["get", "render_min_height"]],
+            ["to-number", ["get", "min_height"]],
+            0,
+          ],
+        },
+      };
     }
 
     function makePhysicsContextFeature(center, radiusDegrees) {
