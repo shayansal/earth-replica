@@ -271,6 +271,18 @@ def test_render_preview_html_has_camera_driven_local_physics_bubble(tmp_path):
     assert "positionPhysicalContextOnGlobe" in html
     assert "makeSurfaceBasis" in html
     assert "localContextPatchRadius" in html
+    assert "localPhysicsBubble.add(physicsGroup)" in html
+    assert "scene.add(physicsGroup)" not in html
+    assert "const showParticleDebug = false" in html
+    assert "const showPrototypeLocalPatch = false" in html
+    assert "physicsGroup.visible = showParticleDebug && physicalContextBlend > 0.98" in html
+    assert "surfaceContextGroup" in html
+    assert "buildSurfaceContextOverlay" in html
+    assert "surfaceContextMaterial" in html
+    assert "new THREE.CircleGeometry(4.5, 96)" in html
+    assert "new THREE.CircleGeometry(2.1, 72)" in html
+    assert "new THREE.PlaneGeometry(9, 9, 64, 64)" not in html
+    assert "new THREE.PlaneGeometry(4.8, 3.2, 48, 32)" not in html
     assert "ConeGeometry" not in html
     assert "updateRenderModeFromCamera" in html
     assert "particleToLocalVector" in html

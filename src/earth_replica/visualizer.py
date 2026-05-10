@@ -349,6 +349,8 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const physicalContextStartDistance = 22;
     const physicalContextFullDistance = 7.2;
     const localContextPatchRadius = renderEarthRadius * 1.022;
+    const showParticleDebug = false;
+    const showPrototypeLocalPatch = false;
     const satelliteTextureUrl = "world.200407.3x5400x2700.jpg";
     const satelliteTextureCredit = "NASA Blue Marble satellite";
     const renderModeLabels = {
@@ -451,12 +453,16 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const terrainGroup = new THREE.Group();
     scene.add(terrainGroup);
     let terrainMesh = null;
+    const surfaceContextGroup = new THREE.Group();
+    scene.add(surfaceContextGroup);
+    let surfaceContextMesh = null;
+    let surfaceContextMaterial = null;
     const localTerrainGroup = new THREE.Group();
     scene.add(localTerrainGroup);
     const localPhysicsBubble = new THREE.Group();
     scene.add(localPhysicsBubble);
     const physicsGroup = new THREE.Group();
-    scene.add(physicsGroup);
+    localPhysicsBubble.add(physicsGroup);
     const waterParticleMeshes = [];
     const soilParticleMeshes = [];
     let localWaterMesh = null;
@@ -927,7 +933,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
 
     function buildLocalPhysicsBubble() {
       localSoilMesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(9, 9, 64, 64),
+        new THREE.CircleGeometry(4.5, 96),
         new THREE.MeshStandardMaterial({
           color: 0x7d6244,
           vertexColors: true,
@@ -943,7 +949,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
       localPhysicsBubble.add(localSoilMesh);
 
       localWaterMesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(4.8, 3.2, 48, 32),
+        new THREE.CircleGeometry(2.1, 72),
         new THREE.MeshPhysicalMaterial({
           color: 0x2f9fd2,
           transparent: true,
@@ -1061,8 +1067,56 @@ _HTML_TEMPLATE = r"""<!doctype html>
       localSoilMesh.geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
       localSoilMesh.material.vertexColors = true;
       localSoilMesh.material.needsUpdate = true;
+      buildSurfaceContextOverlay();
       buildVegetationFromContext();
       updateLocalWaterFromContext();
+    }
+
+    function buildSurfaceContextOverlay() {
+      if (!localContextGrid.length) {
+        return;
+      }
+      if (surfaceContextMesh) {
+        surfaceContextGroup.remove(surfaceContextMesh);
+        surfaceContextMesh.geometry.dispose();
+      }
+      const positions = [];
+      const colors = [];
+      const indices = [];
+      const color = new THREE.Color();
+      const gridSize = Math.sqrt(localContextGrid.length);
+      localContextGrid.forEach((cell) => {
+        const elevationOffset = clamp(cell.elevation / 900000, -0.012, 0.018);
+        const point = latLonToVector(cell.latitude, cell.longitude, renderEarthRadius * 1.026 + elevationOffset);
+        positions.push(point.x, point.y, point.z);
+        color.set(localContextColor(cell.type, cell.elevation));
+        colors.push(color.r, color.g, color.b);
+      });
+      for (let row = 0; row < gridSize - 1; row += 1) {
+        for (let col = 0; col < gridSize - 1; col += 1) {
+          const a = row * gridSize + col;
+          const b = a + 1;
+          const c = a + gridSize;
+          const d = c + 1;
+          indices.push(a, c, b, b, c, d);
+        }
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+      surfaceContextMaterial = new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0,
+        roughness: 0.94,
+        metalness: 0,
+        side: THREE.DoubleSide,
+      });
+      surfaceContextMesh = new THREE.Mesh(geometry, surfaceContextMaterial);
+      surfaceContextGroup.add(surfaceContextMesh);
+      surfaceContextGroup.visible = false;
     }
 
     function nearestLocalContextCell(x, z) {
@@ -1253,12 +1307,13 @@ _HTML_TEMPLATE = r"""<!doctype html>
       grid.visible = false;
       coastlineGroup.visible = false;
       terrainGroup.visible = true;
+      surfaceContextGroup.visible = false;
       surfaceGroup.visible = false;
       bodyGroup.visible = false;
       cellMarker.visible = false;
       localTerrainGroup.visible = false;
       localPhysicsBubble.visible = false;
-      physicsGroup.visible = true;
+      physicsGroup.visible = false;
       playing = true;
       playButton.textContent = "Pause";
       modeValue.textContent = renderModeLabels.global;
@@ -1280,12 +1335,13 @@ _HTML_TEMPLATE = r"""<!doctype html>
       grid.visible = false;
       coastlineGroup.visible = false;
       terrainGroup.visible = false;
+      surfaceContextGroup.visible = false;
       surfaceGroup.visible = false;
       bodyGroup.visible = false;
       cellMarker.visible = false;
       localTerrainGroup.visible = true;
       localPhysicsBubble.visible = false;
-      physicsGroup.visible = false;
+        physicsGroup.visible = false;
       playing = false;
       playButton.textContent = "Inspect";
       modeValue.textContent = renderModeLabels["local-physics"];
@@ -1343,8 +1399,9 @@ _HTML_TEMPLATE = r"""<!doctype html>
       const hasLocalContext = physicalContextBlend > 0.025;
       terrainGroup.visible = Boolean(terrainTile?.grid);
       localTerrainGroup.visible = false;
-      localPhysicsBubble.visible = hasLocalContext;
-      physicsGroup.visible = Boolean(physicsFrames?.frames?.length);
+      localPhysicsBubble.visible = showPrototypeLocalPatch && hasLocalContext;
+      surfaceContextGroup.visible = hasLocalContext;
+      physicsGroup.visible = showParticleDebug && physicalContextBlend > 0.98 && Boolean(physicsFrames?.frames?.length);
       bodyGroup.visible = false;
       cellMarker.visible = false;
       surfaceGroup.visible = false;
@@ -1360,6 +1417,10 @@ _HTML_TEMPLATE = r"""<!doctype html>
       }
       if (atmosphere.material) {
         atmosphere.material.opacity = 0.12 * (1 - physicalContextBlend * 0.85);
+      }
+      if (surfaceContextMaterial) {
+        surfaceContextMaterial.opacity = physicalContextBlend * 0.78;
+        surfaceContextMaterial.needsUpdate = true;
       }
       setGroupOpacity(localPhysicsBubble, physicalContextBlend);
       if (localWaterMesh?.material) {
