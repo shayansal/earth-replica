@@ -59,8 +59,14 @@ Run the dependency-light local preview loop:
 python examples/preview_simulation.py --steps 120 --output artifacts/preview.jsonl --html artifacts/preview.html
 ```
 
-The generated HTML viewer uses Three.js to render Earth at real WGS84 scale in the data model, with a scaled globe for browser visualization and time playback as the fourth dimension.
-It also loads a Natural Earth land/water mask and renders known elevation/bathymetry samples with meter-based provenance. See [docs/surface-model.md](docs/surface-model.md).
+The generated HTML viewer uses MapLibre GL JS to render a real globe projection with streamed satellite imagery and raster DEM terrain. Earth remains 1:1 in the simulation metadata, while the browser camera uses MapLibre's globe and terrain pipeline for natural zoom from orbital view toward local terrain.
+For MapTiler DEM terrain tiles, create a local `.env` file with your MapTiler key:
+
+```bash
+MAPTILER_API_KEY=your-key-here
+```
+
+Without that key, the preview falls back to public satellite imagery and demo DEM terrain. The known elevation/bathymetry records still embed meter-based provenance for validation. See [docs/surface-model.md](docs/surface-model.md).
 
 Fetch a coarse global NOAA ETOPO 2022 relief grid and embed it in the preview:
 
@@ -70,7 +76,7 @@ curl -L "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/bmng/
 python examples/preview_simulation.py --steps 120 --output artifacts/preview.jsonl --html artifacts/preview.html --terrain artifacts/etopo_global.json
 ```
 
-The global shell combines the ETOPO relief/bathymetry displacement map with NASA Blue Marble satellite imagery. The browser preview keeps the planet in real WGS84 meters in the data model, then scales the render so a laptop can orbit the whole Earth and switch to a local Genesis water/soil physics bubble when you zoom in.
+The global shell combines ETOPO relief/bathymetry provenance with satellite imagery and streamed terrain tiles. The browser preview keeps the planet in real WGS84 meters in the data model, then uses MapLibre to orbit the whole Earth and transition toward local Genesis water/soil context when you zoom in.
 
 Fetch a local higher-resolution ETOPO 2022 terrain subset and embed it in the preview:
 

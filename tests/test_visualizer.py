@@ -4,7 +4,7 @@ from earth_replica.terrain import TerrainBounds, TerrainSample, TerrainTile
 from earth_replica.visualizer import render_preview_html
 
 
-def test_render_preview_html_embeds_frames_and_canvas(tmp_path):
+def test_render_preview_html_embeds_frames_and_maplibre_globe(tmp_path):
     frames_path = tmp_path / "preview.jsonl"
     output_path = tmp_path / "preview.html"
     frames = [
@@ -73,23 +73,26 @@ def test_render_preview_html_embeds_frames_and_canvas(tmp_path):
 
     assert returned_path == output_path
     assert "Earth Replica Preview" in html
-    assert '<canvas id="scene"' in html
-    assert 'from "three"' in html
-    assert 'from "topojson-client"' in html
-    assert "land-110m.json" in html
-    assert "6,371,008.8 m" in html
+    assert '<div id="map" aria-label="Earth Replica MapLibre globe preview">' in html
+    assert "maplibre-gl" in html
+    assert "MapLibre GL JS" in html
+    assert 'map.setProjection({ type: "globe" })' in html
+    assert 'map.setProjection({ type: "mercator" })' in html
+    assert "Local tangent" in html
+    assert "satelliteSource" in html
+    assert "terrainSource" in html
+    assert "Focus Physics Area" in html
+    assert "1:1 physical data model" in html
+    assert "mean_radius_m" in html
+    assert "formatMeters(planetRadiusM)" in html
     assert "Challenger Deep" in html
     assert "Mount Everest" in html
     assert '<script id="terrain-tile-data" type="application/json">' in html
     assert "NOAA ETOPO 2022 Global Relief Model" in html
-    assert "buildTerrainMesh" in html
-    assert "buildLocalTerrainMesh" in html
-    assert "Vertical display" in html
-    assert "Terrain exaggeration" in html
-    assert 'bodyCount.textContent = terrainTile ? "hidden" : String(names.length)' in html
-    assert "if (!terrainTile) {\n      focusTerrainTile();" in html
     assert '<script id="frames-data" type="application/json">' in html
     assert '<script id="surface-samples-data" type="application/json">' in html
+    assert "__MAPTILER_API_KEY__" not in html
+    assert 'const maptilerApiKey = "";' in html
     assert "872830828ffffff" in html
     assert "probe" in html
 
@@ -136,27 +139,13 @@ def test_render_preview_html_supports_global_terrain_mode(tmp_path):
     returned_path = render_preview_html(frames_path, output_path, terrain_path=terrain_path)
     html = returned_path.read_text(encoding="utf-8")
 
-    assert "isGlobalTerrainTile" in html
-    assert "buildGlobalTerrainMesh" in html
-    assert "createGlobalTerrainTextures" in html
-    assert "displacementMap" in html
-    assert "satelliteTextureUrl" in html
-    assert "world.200407.3x5400x2700.jpg" in html
-    assert "NASA Blue Marble satellite" in html
-    assert "nearestElevation" in html
-    assert "enableGlobalTerrainMode" in html
-    assert "Global ETOPO relief mesh" in html
-    assert (
-        'function enableGlobalTerrainMode() {\n      activeRenderMode = "global";\n'
-        "      earth.visible = false;\n      atmosphere.visible = true;\n"
-        "      grid.visible = false;"
-    ) in html
-    assert "coastlineGroup.visible = false;\n      terrainGroup.visible = true;" in html
-    assert 'terrainScale.textContent = "ETOPO visual relief"' in html
-    assert 'verticalScale.textContent = "global bump map"' in html
-    assert "if (terrainTile && !isGlobalTerrainTile())" in html
-    assert "terrainTile.bounds.max_latitude >= 88" in html
-    assert "terrainTile.bounds.max_longitude >= 178" in html
+    assert '"raster-dem"' in html
+    assert "terrain-rgb-v2" in html
+    assert "World_Imagery" in html
+    assert "physics-context-fill" in html
+    assert "MapLibre renders a globe projection" in html
+    assert "streamed satellite raster tiles and raster DEM terrain" in html
+    assert "NOAA ETOPO 2022 Global Relief Model" in html
 
 
 def test_render_preview_html_embeds_genesis_physics_frames(tmp_path):
@@ -211,13 +200,16 @@ def test_render_preview_html_embeds_genesis_physics_frames(tmp_path):
     html = returned_path.read_text(encoding="utf-8")
 
     assert '<script id="physics-frames-data" type="application/json">' in html
-    assert "buildPhysicsParticles" in html
-    assert "updatePhysicsFrame" in html
     assert "Genesis SPH.Liquid" in html
     assert "Genesis MPM.Sand" in html
+    assert "Genesis local physics shard" in html
+    assert "water samples" in html
+    assert "soil samples" in html
+    assert "not floating particles" in html
+    assert "SphereGeometry" not in html
 
 
-def test_render_preview_html_has_camera_driven_local_physics_bubble(tmp_path):
+def test_render_preview_html_has_natural_zoom_to_georeferenced_physics_context(tmp_path):
     frames_path = tmp_path / "preview.jsonl"
     output_path = tmp_path / "preview.html"
     physics_path = tmp_path / "physics.json"
@@ -258,32 +250,19 @@ def test_render_preview_html_has_camera_driven_local_physics_bubble(tmp_path):
     render_preview_html(frames_path, output_path, physics_path=physics_path)
     html = output_path.read_text(encoding="utf-8")
 
-    assert "localPhysicsBubble" in html
-    assert "buildLocalPhysicsBubble" in html
-    assert "applyLocalSoilRelief" in html
-    assert "animateLocalPhysicsBubble" in html
-    assert "physicalContextBlend" in html
-    assert "updatePhysicalContextBlend" in html
-    assert "setPhysicalContextBlend" in html
-    assert "deriveLocalContextFromSatellite" in html
-    assert "classifySatelliteContext" in html
-    assert "localVegetationGroup" in html
-    assert "positionPhysicalContextOnGlobe" in html
-    assert "makeSurfaceBasis" in html
-    assert "localContextPatchRadius" in html
-    assert "localPhysicsBubble.add(physicsGroup)" in html
+    assert "Focus Physics Area" in html
+    assert "map.easeTo" in html
+    assert "zoom: 13" in html
+    assert "pitch: 56" in html
+    assert "makePhysicsContextFeature" in html
+    assert "physicsContext" in html
+    assert 'zoom >= 10 ? "Local terrain" : "Global terrain"' in html
+    assert "renderWorldCopies: false" in html
+    assert "not floating particles" in html
+    assert "localPhysicsBubble" not in html
+    assert "buildLocalPhysicsBubble" not in html
     assert "scene.add(physicsGroup)" not in html
-    assert "const showParticleDebug = false" in html
-    assert "const showPrototypeLocalPatch = false" in html
-    assert "physicsGroup.visible = showParticleDebug && physicalContextBlend > 0.98" in html
-    assert "surfaceContextGroup" in html
-    assert "buildSurfaceContextOverlay" in html
-    assert "surfaceContextMaterial" in html
-    assert "new THREE.CircleGeometry(4.5, 96)" in html
-    assert "new THREE.CircleGeometry(2.1, 72)" in html
-    assert "new THREE.PlaneGeometry(9, 9, 64, 64)" not in html
-    assert "new THREE.PlaneGeometry(4.8, 3.2, 48, 32)" not in html
+    assert "SphereGeometry" not in html
+    assert "CircleGeometry" not in html
+    assert "PlaneGeometry" not in html
     assert "ConeGeometry" not in html
-    assert "updateRenderModeFromCamera" in html
-    assert "particleToLocalVector" in html
-    assert "modeValue.textContent = renderModeLabels[activeRenderMode]" in html

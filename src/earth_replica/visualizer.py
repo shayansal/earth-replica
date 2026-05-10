@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -39,16 +40,387 @@ def render_preview_html(
     if physics_path is not None:
         physics_json = physics_path.read_text(encoding="utf-8").replace("</", "<\\/")
     output_path.write_text(
-        _HTML_TEMPLATE.replace("__FRAMES_JSON__", frame_json).replace(
+        _MAPLIBRE_HTML_TEMPLATE.replace("__FRAMES_JSON__", frame_json).replace(
             "__SURFACE_SAMPLES_JSON__",
             surface_json,
         ).replace("__TERRAIN_TILE_JSON__", terrain_json).replace(
             "__PHYSICS_FRAMES_JSON__",
             physics_json,
+        ).replace(
+            "__MAPTILER_API_KEY_JSON__",
+            json.dumps(_load_maptiler_api_key(output_path)),
         ),
         encoding="utf-8",
     )
     return output_path
+
+
+def _load_maptiler_api_key(output_path: Path) -> str:
+    env_value = os.environ.get("MAPTILER_API_KEY", "").strip()
+    if env_value:
+        return env_value
+    for directory in (output_path.resolve().parent, *output_path.resolve().parents):
+        env_path = directory / ".env"
+        if not env_path.exists():
+            continue
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("MAPTILER_API_KEY="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return ""
+
+
+_MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Earth Replica Preview</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.23.0/dist/maplibre-gl.css">
+  <script src="https://unpkg.com/maplibre-gl@5.23.0/dist/maplibre-gl.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --glass: rgba(7, 10, 15, 0.78);
+      --glass-strong: rgba(10, 16, 24, 0.92);
+      --text: #eef6ff;
+      --muted: #a8b5c3;
+      --line: rgba(148, 171, 195, 0.22);
+      --accent: #55d6be;
+      --accent-2: #66b7ff;
+      --warning: #ffcf66;
+    }
+    html, body, #map {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #03060a;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+    }
+    .hud {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      right: 20px;
+      z-index: 2;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      pointer-events: none;
+    }
+    .title-block {
+      max-width: 520px;
+      text-shadow: 0 2px 24px rgba(0,0,0,0.86);
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: clamp(24px, 3vw, 42px);
+      letter-spacing: 0;
+    }
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 14px;
+    }
+    .stats {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      max-width: 720px;
+    }
+    .stat, .legend, .controls {
+      background: var(--glass);
+      border: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 18px 50px rgba(0,0,0,0.28);
+    }
+    .stat {
+      min-width: 116px;
+      padding: 11px 13px;
+      border-radius: 8px;
+    }
+    .stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 4px;
+    }
+    .stat strong {
+      display: block;
+      font-size: 15px;
+      white-space: nowrap;
+    }
+    .legend {
+      position: fixed;
+      right: 20px;
+      bottom: 76px;
+      z-index: 2;
+      width: min(430px, calc(100vw - 40px));
+      border-radius: 8px;
+      padding: 16px 18px;
+      color: #c7d3df;
+      line-height: 1.45;
+      font-size: 13px;
+    }
+    .body-row {
+      padding: 9px 0;
+      border-bottom: 1px solid rgba(148, 171, 195, 0.14);
+    }
+    .body-row:last-child {
+      border-bottom: 0;
+    }
+    .body-row strong {
+      display: block;
+      color: var(--accent-2);
+      margin-bottom: 4px;
+    }
+    .controls {
+      position: fixed;
+      left: 20px;
+      bottom: 20px;
+      z-index: 2;
+      display: flex;
+      gap: 10px;
+      border-radius: 8px;
+      padding: 10px;
+      pointer-events: auto;
+    }
+    button {
+      appearance: none;
+      border: 1px solid rgba(85, 214, 190, 0.32);
+      background: rgba(18, 58, 74, 0.82);
+      color: var(--text);
+      padding: 9px 13px;
+      border-radius: 6px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .maplibregl-ctrl-bottom-left,
+    .maplibregl-ctrl-bottom-right {
+      bottom: 78px;
+    }
+    @media (max-width: 760px) {
+      .hud {
+        flex-direction: column;
+      }
+      .stats {
+        justify-content: flex-start;
+      }
+      .legend {
+        left: 12px;
+        right: 12px;
+        bottom: 84px;
+        width: auto;
+      }
+      .controls {
+        left: 12px;
+        right: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="map" aria-label="Earth Replica MapLibre globe preview"></div>
+  <section class="hud">
+    <div class="title-block">
+      <h1>Earth Replica Preview</h1>
+      <p class="subtitle">MapLibre globe with streamed satellite imagery, raster DEM terrain, and Genesis physics metadata attached as surface context.</p>
+    </div>
+    <div class="stats">
+      <div class="stat"><span>Renderer</span><strong>MapLibre GL JS</strong></div>
+      <div class="stat"><span>Projection</span><strong id="projectionValue">Globe</strong></div>
+      <div class="stat"><span>Surface</span><strong id="surfaceStatus">Satellite + DEM</strong></div>
+      <div class="stat"><span>Zoom</span><strong id="zoomValue">-</strong></div>
+      <div class="stat"><span>Mode</span><strong id="modeValue">Global terrain</strong></div>
+      <div class="stat"><span>Physics</span><strong id="physicsValue">Surface context</strong></div>
+    </div>
+  </section>
+  <section id="legend" class="legend" aria-live="polite"></section>
+  <section class="controls">
+    <button id="focusButton" type="button">Focus Physics Area</button>
+    <button id="orbitButton" type="button">Orbit Globe</button>
+  </section>
+
+  <script id="frames-data" type="application/json">__FRAMES_JSON__</script>
+  <script id="surface-samples-data" type="application/json">__SURFACE_SAMPLES_JSON__</script>
+  <script id="terrain-tile-data" type="application/json">__TERRAIN_TILE_JSON__</script>
+  <script id="physics-frames-data" type="application/json">__PHYSICS_FRAMES_JSON__</script>
+  <script>
+    const frames = JSON.parse(document.getElementById("frames-data").textContent);
+    const surfaceSamples = JSON.parse(document.getElementById("surface-samples-data").textContent);
+    const terrainTile = JSON.parse(document.getElementById("terrain-tile-data").textContent);
+    const physicsFrames = JSON.parse(document.getElementById("physics-frames-data").textContent);
+    const maptilerApiKey = __MAPTILER_API_KEY_JSON__;
+    const focusFrame = frames[0];
+    const planetRadiusM = Number(focusFrame.planet?.mean_radius_m || 6371008.8);
+    const focusCenter = [
+      Number(focusFrame.cell.center_longitude || 0),
+      Number(focusFrame.cell.center_latitude || 0),
+    ];
+    const hasMapTiler = Boolean(maptilerApiKey);
+    const satelliteSource = {
+      type: "raster",
+      tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+      tileSize: 256,
+      attribution: "Esri, Maxar, Earthstar Geographics",
+    };
+    const terrainSource = hasMapTiler
+      ? {
+          type: "raster-dem",
+          url: `https://api.maptiler.com/tiles/terrain-rgb-v2/tiles.json?key=${maptilerApiKey}`,
+          tileSize: 512,
+        }
+      : {
+          type: "raster-dem",
+          url: "https://demotiles.maplibre.org/terrain-tiles/tiles.json",
+          tileSize: 256,
+        };
+
+    const map = new maplibregl.Map({
+      container: "map",
+      center: focusCenter,
+      zoom: 2.3,
+      pitch: 0,
+      bearing: 0,
+      antialias: true,
+      maxPitch: 85,
+      renderWorldCopies: false,
+      style: {
+        version: 8,
+        sources: {
+          satellite: satelliteSource,
+          terrainSource,
+          physicsContext: {
+            type: "geojson",
+            data: makePhysicsContextFeature(focusCenter, 0.02),
+          },
+        },
+        layers: [
+          { id: "satellite", type: "raster", source: "satellite" },
+          {
+            id: "physics-context-fill",
+            type: "fill",
+            source: "physicsContext",
+            paint: {
+              "fill-color": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                2, "rgba(85, 214, 190, 0.0)",
+                8, "rgba(85, 214, 190, 0.0)",
+                14, "rgba(85, 214, 190, 0.04)",
+              ],
+              "fill-outline-color": "rgba(85, 214, 190, 0.22)",
+            },
+          },
+        ],
+        terrain: { source: "terrainSource", exaggeration: 1.15 },
+      },
+    });
+
+    map.on("style.load", () => {
+      map.setProjection({ type: "globe" });
+    });
+
+    map.on("load", () => {
+      map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+      map.addControl(new maplibregl.FullscreenControl(), "top-right");
+      map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
+      map.addControl(new maplibregl.TerrainControl({ source: "terrainSource", exaggeration: 1.15 }), "top-right");
+      updateHud();
+      updateLegend();
+    });
+
+    map.on("move", updateHud);
+
+    document.getElementById("focusButton").addEventListener("click", () => {
+      map.setProjection({ type: "mercator" });
+      map.easeTo({
+        center: focusCenter,
+        zoom: 13,
+        pitch: 56,
+        bearing: -24,
+        duration: 2600,
+        essential: true,
+      });
+    });
+
+    document.getElementById("orbitButton").addEventListener("click", () => {
+      map.setProjection({ type: "globe" });
+      map.easeTo({
+        center: focusCenter,
+        zoom: 2.3,
+        pitch: 0,
+        bearing: 0,
+        duration: 2200,
+        essential: true,
+      });
+    });
+
+    function updateHud() {
+      const zoom = map.getZoom();
+      const projectionType = map.getProjection?.()?.type || "globe";
+      document.getElementById("zoomValue").textContent = zoom.toFixed(2);
+      document.getElementById("projectionValue").textContent = projectionType === "globe" ? "Globe" : "Local tangent";
+      document.getElementById("modeValue").textContent = zoom >= 10 ? "Local terrain" : "Global terrain";
+      document.getElementById("physicsValue").textContent = physicsFrames?.frames?.length
+        ? "Genesis surface-ready"
+        : "No shard loaded";
+      document.getElementById("surfaceStatus").textContent = hasMapTiler
+        ? "Satellite + MapTiler DEM"
+        : "Satellite + demo DEM";
+    }
+
+    function updateLegend() {
+      const firstPhysicsFrame = physicsFrames?.frames?.[0];
+      const physicsRow = firstPhysicsFrame
+        ? `<div class="body-row"><strong>Genesis local physics shard</strong>${physicsFrames.frames.length} frames available as local surface effects; ${firstPhysicsFrame.water_particles.length} water samples and ${firstPhysicsFrame.soil_particles.length} soil samples are kept out of the visual debug layer.</div>`
+        : "";
+      const terrainRow = terrainTile?.source
+        ? `<div class="body-row"><strong>Reference terrain data</strong>${terrainTile.source.name} remains available for validation/provenance; MapLibre streams terrain tiles for the interactive globe.</div>`
+        : "";
+      document.getElementById("legend").innerHTML =
+        `<div class="body-row"><strong>1:1 physical data model</strong>Earth radius is kept at ${formatMeters(planetRadiusM)} in simulation metadata while MapLibre handles the camera-scaled globe.</div>` +
+        `<div class="body-row"><strong>Real zoom foundation</strong>MapLibre renders a globe projection with streamed satellite raster tiles and raster DEM terrain, following the 3D terrain approach from the MapLibre tutorial pattern.</div>` +
+        `<div class="body-row"><strong>Physical context</strong>Physics is represented as georeferenced surface context, not floating particles. Genesis output is reserved for surface effects such as water, soil wetness, erosion, and deformation.</div>` +
+        physicsRow +
+        terrainRow +
+        surfaceSamples.slice(0, 2).map((sample) =>
+          `<div class="body-row"><strong>${sample.name}</strong>${sample.surface_type} | ${Number(sample.elevation_m).toLocaleString()}m | ${sample.source.name}</div>`
+        ).join("");
+    }
+
+    function formatMeters(value) {
+      return `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 1 })} m`;
+    }
+
+    function makePhysicsContextFeature(center, radiusDegrees) {
+      const coordinates = [];
+      for (let index = 0; index <= 96; index += 1) {
+        const angle = (index / 96) * Math.PI * 2;
+        coordinates.push([
+          center[0] + Math.cos(angle) * radiusDegrees,
+          center[1] + Math.sin(angle) * radiusDegrees,
+        ]);
+      }
+      return {
+        type: "FeatureCollection",
+        features: [{
+          type: "Feature",
+          properties: { source: "Genesis local physics shard" },
+          geometry: { type: "Polygon", coordinates: [coordinates] },
+        }],
+      };
+    }
+  </script>
+</body>
+</html>
+"""
 
 
 _HTML_TEMPLATE = r"""<!doctype html>

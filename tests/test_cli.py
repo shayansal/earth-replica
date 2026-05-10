@@ -57,4 +57,6 @@ def test_run_preview_can_embed_physics_artifact(tmp_path):
         physics_path=physics_path,
     )
 
-    assert "Genesis water/soil shard" in html_path.read_text(encoding="utf-8")
+    html = html_path.read_text(encoding="utf-8")
+    assert "Genesis local physics shard" in html
+    assert "water samples" in html
