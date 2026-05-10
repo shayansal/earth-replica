@@ -59,6 +59,8 @@ The first open tile worker accepts a bounded WGS84 tile request and emits:
 - `provenance.json`: explicit observed, inferred, simulated, and rendered records for every layer.
 - `genesis-terrain-patch.json`: terrain grid, material map, water/building/road obstacles, and the Genesis physics output contract.
 
+The golden tile builder in `examples/build_golden_tile.py` is the first quality benchmark. It fetches a bounded measured patch, emits multi-material terrain/building/road/water GLB primitives, and writes `golden-tile-quality.json` so the preview can be judged against source coverage instead of hand-made demo geometry.
+
 Production adapters should replace the fixture features in `examples/build_open_tile.py` with:
 
 - Overture Maps buildings and places.

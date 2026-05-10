@@ -3,18 +3,35 @@
 from __future__ import annotations
 
 import json
+import os
+import ssl
 import struct
+import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Callable, Iterable, Any
+from urllib.parse import urlencode
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from earth_replica.open_tile_pipeline import OpenFeature, ProvenanceRecord
 from earth_replica.terrain import TerrainBounds
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+USER_AGENT = "EarthReplica/0.1 (https://github.com/shayansal/earth-replica)"
 
 
 FetchText = Callable[[str, bytes, int], str]
+
+
+@dataclass(frozen=True)
+class OsmContext:
+    """Observed OSM context clipped to a bounded preview tile."""
+
+    buildings: tuple[OpenFeature, ...]
+    roads: tuple[OpenFeature, ...]
+    water: tuple[OpenFeature, ...]
+    land_cover: dict[str, float]
 
 
 def build_overpass_query(bounds: TerrainBounds) -> str:
@@ -27,6 +44,7 @@ def build_overpass_query(bounds: TerrainBounds) -> str:
     return f"""
 [out:json][timeout:60];
 (
+  way["building"]({bbox});
   way["highway"]({bbox});
   way["natural"="water"]({bbox});
   way["waterway"]({bbox});
@@ -57,7 +75,27 @@ def fetch_osm_features(
     return features_from_osm_overpass(payload)
 
 
+def fetch_osm_context(
+    bounds: TerrainBounds,
+    *,
+    timeout_s: int = 60,
+    fetcher: FetchText | None = None,
+) -> OsmContext:
+    """Fetch bounded OSM buildings, roads, water, and land-cover hints."""
+
+    fetch = fetcher or _default_fetch_text
+    data = build_overpass_query(bounds).encode("utf-8")
+    payload = json.loads(fetch(OVERPASS_URL, data, timeout_s))
+    return features_from_osm_context(payload)
+
+
 def features_from_osm_overpass(payload: dict[str, Any]) -> tuple[tuple[OpenFeature, ...], tuple[OpenFeature, ...], dict[str, float]]:
+    context = features_from_osm_context(payload)
+    return (context.roads, context.water, context.land_cover)
+
+
+def features_from_osm_context(payload: dict[str, Any]) -> OsmContext:
+    buildings: list[OpenFeature] = []
     roads: list[OpenFeature] = []
     water: list[OpenFeature] = []
     land_cover_counts = {"urban": 0.0, "vegetation": 0.0, "water": 0.0}
@@ -69,7 +107,18 @@ def features_from_osm_overpass(payload: dict[str, Any]) -> tuple[tuple[OpenFeatu
             continue
         tags = element.get("tags", {})
         way_id = element.get("id", "unknown")
-        if "highway" in tags:
+        if "building" in tags and len(geometry) >= 3:
+            buildings.append(
+                OpenFeature(
+                    feature_id=f"osm:building:{way_id}",
+                    layer="buildings",
+                    geometry=_closed_polygon_to_open_ring(geometry),
+                    height_m=_building_height(tags),
+                    provenance=_osm_provenance(f"osm:building:{way_id}", "buildings", "mapped footprint"),
+                )
+            )
+            land_cover_counts["urban"] += 1.0
+        elif "highway" in tags:
             roads.append(
                 OpenFeature(
                     feature_id=f"osm:way:{way_id}",
@@ -104,7 +153,12 @@ def features_from_osm_overpass(payload: dict[str, Any]) -> tuple[tuple[OpenFeatu
             key: round(value / total, 4)
             for key, value in land_cover_counts.items()
         }
-    return (tuple(roads), tuple(water), land_cover)
+    return OsmContext(
+        buildings=tuple(buildings),
+        roads=tuple(roads),
+        water=tuple(water),
+        land_cover=land_cover,
+    )
 
 
 def features_from_overture_records(
@@ -167,9 +221,62 @@ def load_overture_buildings_from_geoparquet(path: str, bounds: TerrainBounds) ->
 
 
 def _default_fetch_text(url: str, data: bytes, timeout_s: int) -> str:
-    request = Request(url, data=data, headers={"Content-Type": "text/plain; charset=utf-8"})
-    with urlopen(request, timeout=timeout_s) as response:
-        return response.read().decode("utf-8")
+    form_data = _overpass_form_data(data)
+    request = Request(
+        url,
+        data=form_data,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
+            "User-Agent": USER_AGENT,
+        },
+    )
+    try:
+        with urlopen(request, timeout=timeout_s) as response:
+            return response.read().decode("utf-8")
+    except URLError as exc:
+        if sys.platform != "win32" or not _is_certificate_error(exc):
+            raise
+        return _fetch_text_with_windows_trust_store(url=url, data=form_data, timeout_s=timeout_s)
+
+
+def _is_certificate_error(exc: URLError) -> bool:
+    return isinstance(exc.reason, ssl.SSLError)
+
+
+def _fetch_text_with_windows_trust_store(url: str, data: bytes, timeout_s: int) -> str:
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        (
+            "$ProgressPreference='SilentlyContinue'; "
+            "$u=[Environment]::GetEnvironmentVariable('EARTH_REPLICA_FETCH_URL'); "
+            "$body=[Environment]::GetEnvironmentVariable('EARTH_REPLICA_FETCH_BODY'); "
+            "$ua=[Environment]::GetEnvironmentVariable('EARTH_REPLICA_USER_AGENT'); "
+            "(Invoke-WebRequest -UseBasicParsing -Uri $u -Method Post "
+            "-Headers @{ 'User-Agent'=$ua } "
+            "-ContentType 'application/x-www-form-urlencoded; charset=utf-8' -Body $body).Content"
+        ),
+    ]
+    env = os.environ.copy()
+    env["EARTH_REPLICA_FETCH_URL"] = url
+    env["EARTH_REPLICA_FETCH_BODY"] = data.decode("utf-8")
+    env["EARTH_REPLICA_USER_AGENT"] = USER_AGENT
+    result = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout_s,
+        env=env,
+    )
+    return result.stdout
+
+
+def _overpass_form_data(query_bytes: bytes) -> bytes:
+    return urlencode({"data": query_bytes.decode("utf-8")}).encode("utf-8")
 
 
 def _geometry_from_overpass(element: dict[str, Any]) -> tuple[tuple[float, float], ...]:
@@ -178,6 +285,12 @@ def _geometry_from_overpass(element: dict[str, Any]) -> tuple[tuple[float, float
         for point in element.get("geometry", [])
         if "lon" in point and "lat" in point
     )
+
+
+def _closed_polygon_to_open_ring(geometry: tuple[tuple[float, float], ...]) -> tuple[tuple[float, float], ...]:
+    if len(geometry) > 1 and geometry[0] == geometry[-1]:
+        return geometry[:-1]
+    return geometry
 
 
 def _geometry_from_overture_record(record: dict[str, Any]) -> tuple[tuple[float, float], ...]:
@@ -224,6 +337,17 @@ def _height_from_record(record: dict[str, Any]) -> float:
         if value is not None:
             return max(float(value), 3.0)
     levels = record.get("levels") or record.get("num_floors")
+    if levels is not None:
+        return max(float(levels) * 3.2, 3.0)
+    return 9.0
+
+
+def _building_height(tags: dict[str, Any]) -> float:
+    for key in ("height", "building:height"):
+        value = tags.get(key)
+        if value is not None:
+            return max(float(str(value).replace("m", "").strip()), 3.0)
+    levels = tags.get("building:levels") or tags.get("levels")
     if levels is not None:
         return max(float(levels) * 3.2, 3.0)
     return 9.0

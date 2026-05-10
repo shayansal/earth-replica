@@ -18,12 +18,19 @@ def run_preview(
     physics_path: Path | None = None,
     renderer: str = "maplibre",
     open_tileset_path: Path | None = None,
+    center_latitude: float = 37.7749,
+    center_longitude: float = -122.4194,
+    h3_index: str = "872830828ffffff",
 ) -> Path:
     if steps <= 0:
         raise ValueError("steps must be positive")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    simulation = build_demo_preview_simulation()
+    simulation = build_demo_preview_simulation(
+        latitude=center_latitude,
+        longitude=center_longitude,
+        h3_index=h3_index,
+    )
     frames = simulation.run(steps=steps)
 
     with output_path.open("w", encoding="utf-8") as handle:
@@ -88,6 +95,9 @@ def main() -> None:
         default=None,
         help="Optional local 3D Tiles tileset.json to load in the Cesium viewer.",
     )
+    parser.add_argument("--lat", type=float, default=37.7749, help="Preview center latitude.")
+    parser.add_argument("--lon", type=float, default=-122.4194, help="Preview center longitude.")
+    parser.add_argument("--h3", default="872830828ffffff", help="Preview H3 index label.")
     args = parser.parse_args()
 
     output_path = run_preview(
@@ -98,6 +108,9 @@ def main() -> None:
         physics_path=args.physics,
         renderer=args.renderer,
         open_tileset_path=args.open_tileset,
+        center_latitude=args.lat,
+        center_longitude=args.lon,
+        h3_index=args.h3,
     )
     print(f"Wrote preview frames to {output_path}")
     if args.html is not None:

@@ -365,7 +365,8 @@ def _build_glb(
         builder.add_polygon(feature, z_m=0.04)
     metrics["terrain_vertices"] = builder.terrain_vertices
     metrics["vertices"] = len(builder.positions)
-    metrics["triangles"] = len(builder.indices) // 3
+    metrics["triangles"] = sum(len(indices) for indices in builder.primitive_indices.values()) // 3
+    metrics["material_primitives"] = sum(1 for indices in builder.primitive_indices.values() if indices)
     return builder.to_glb()
 
 
@@ -374,7 +375,12 @@ class _MeshBuilder:
         self.request = request
         self.positions: list[tuple[float, float, float]] = []
         self.normals: list[tuple[float, float, float]] = []
-        self.indices: list[int] = []
+        self.primitive_indices: dict[int, list[int]] = {
+            0: [],
+            1: [],
+            2: [],
+            3: [],
+        }
         self.terrain_vertices = 0
 
     def add_terrain(self, terrain: TerrainTile) -> None:
@@ -401,7 +407,7 @@ class _MeshBuilder:
                 b = vertex_indices[lat_index][lon_index + 1]
                 c = vertex_indices[lat_index + 1][lon_index + 1]
                 d = vertex_indices[lat_index + 1][lon_index]
-                self.indices.extend([a, b, c, a, c, d])
+                self.primitive_indices[0].extend([a, b, c, a, c, d])
         self.terrain_vertices = len(latitudes) * len(longitudes)
 
     def add_building(self, feature: OpenFeature) -> None:
@@ -411,15 +417,15 @@ class _MeshBuilder:
         if len(base) == 3:
             base.append(base[-1])
         top = [(x, y, z + max(feature.height_m, 3.0)) for x, y, z in base]
-        self._add_quad(base)
-        self._add_quad(list(reversed(top)))
+        self._add_quad(base, material_index=1)
+        self._add_quad(list(reversed(top)), material_index=1)
         for index in range(4):
             self._add_quad([
                 base[index],
                 base[(index + 1) % 4],
                 top[(index + 1) % 4],
                 top[index],
-            ])
+            ], material_index=1)
 
     def add_polyline_strip(self, feature: OpenFeature, height_m: float) -> None:
         if len(feature.geometry) < 2:
@@ -438,7 +444,7 @@ class _MeshBuilder:
                 (bx + nx, by + ny, height_m),
                 (bx - nx, by - ny, height_m),
                 (ax - nx, ay - ny, height_m),
-            ])
+            ], material_index=2)
 
     def add_polygon(self, feature: OpenFeature, z_m: float) -> None:
         if len(feature.geometry) < 3:
@@ -446,14 +452,14 @@ class _MeshBuilder:
         points = [self._local(lon, lat, z_m) for lon, lat in feature.geometry[:4]]
         if len(points) == 3:
             points.append(points[-1])
-        self._add_quad(points)
+        self._add_quad(points, material_index=3)
 
-    def _add_quad(self, points: list[tuple[float, float, float]]) -> None:
+    def _add_quad(self, points: list[tuple[float, float, float]], material_index: int) -> None:
         normal = _normal(points[0], points[1], points[2])
         start = len(self.positions)
         for point in points:
             self._add_vertex(point, normal)
-        self.indices.extend([start, start + 1, start + 2, start, start + 2, start + 3])
+        self.primitive_indices[material_index].extend([start, start + 1, start + 2, start, start + 2, start + 3])
 
     def _add_vertex(self, point: tuple[float, float, float], normal: tuple[float, float, float]) -> int:
         self.positions.append(point)
@@ -470,60 +476,82 @@ class _MeshBuilder:
     def to_glb(self) -> bytes:
         position_bytes = b"".join(struct.pack("<3f", *value) for value in self.positions)
         normal_bytes = b"".join(struct.pack("<3f", *value) for value in self.normals)
-        index_bytes = b"".join(struct.pack("<H", value) for value in self.indices)
-        binary = _pad4(position_bytes) + _pad4(normal_bytes) + _pad4(index_bytes)
+        index_component_type = 5125 if len(self.positions) > 65_535 else 5123
+        index_pack = "<I" if index_component_type == 5125 else "<H"
+        index_byte_chunks = {
+            material_index: b"".join(struct.pack(index_pack, value) for value in indices)
+            for material_index, indices in self.primitive_indices.items()
+            if indices
+        }
+        binary = _pad4(position_bytes) + _pad4(normal_bytes)
         position_offset = 0
         normal_offset = len(_pad4(position_bytes))
-        index_offset = normal_offset + len(_pad4(normal_bytes))
+        index_offsets: dict[int, int] = {}
+        running_offset = normal_offset + len(_pad4(normal_bytes))
+        for material_index, index_bytes in index_byte_chunks.items():
+            index_offsets[material_index] = running_offset
+            binary += _pad4(index_bytes)
+            running_offset += len(_pad4(index_bytes))
         mins = [min(position[axis] for position in self.positions) for axis in range(3)]
         maxs = [max(position[axis] for position in self.positions) for axis in range(3)]
+        buffer_views = [
+            {"buffer": 0, "byteOffset": position_offset, "byteLength": len(position_bytes), "target": 34962},
+            {"buffer": 0, "byteOffset": normal_offset, "byteLength": len(normal_bytes), "target": 34962},
+        ]
+        accessors = [
+            {
+                "bufferView": 0,
+                "componentType": 5126,
+                "count": len(self.positions),
+                "type": "VEC3",
+                "min": mins,
+                "max": maxs,
+            },
+            {
+                "bufferView": 1,
+                "componentType": 5126,
+                "count": len(self.normals),
+                "type": "VEC3",
+            },
+        ]
+        primitives = []
+        for material_index, index_bytes in index_byte_chunks.items():
+            buffer_view_index = len(buffer_views)
+            accessor_index = len(accessors)
+            buffer_views.append(
+                {
+                    "buffer": 0,
+                    "byteOffset": index_offsets[material_index],
+                    "byteLength": len(index_bytes),
+                    "target": 34963,
+                }
+            )
+            accessors.append(
+                {
+                    "bufferView": buffer_view_index,
+                    "componentType": index_component_type,
+                    "count": len(self.primitive_indices[material_index]),
+                    "type": "SCALAR",
+                }
+            )
+            primitives.append(
+                {
+                    "attributes": {"POSITION": 0, "NORMAL": 1},
+                    "indices": accessor_index,
+                    "mode": 4,
+                    "material": material_index,
+                }
+            )
         gltf = {
             "asset": {"version": "2.0", "generator": "earth-replica-open-tile-worker"},
             "scene": 0,
             "scenes": [{"nodes": [0]}],
             "nodes": [{"mesh": 0}],
-            "meshes": [{
-                "primitives": [{
-                    "attributes": {"POSITION": 0, "NORMAL": 1},
-                    "indices": 2,
-                    "mode": 4,
-                    "material": 0,
-                }],
-            }],
-            "materials": [{
-                "pbrMetallicRoughness": {
-                    "baseColorFactor": [0.56, 0.68, 0.52, 1.0],
-                    "roughnessFactor": 0.82,
-                },
-            }],
+            "meshes": [{"primitives": primitives}],
+            "materials": _gltf_materials(),
             "buffers": [{"byteLength": len(binary)}],
-            "bufferViews": [
-                {"buffer": 0, "byteOffset": position_offset, "byteLength": len(position_bytes), "target": 34962},
-                {"buffer": 0, "byteOffset": normal_offset, "byteLength": len(normal_bytes), "target": 34962},
-                {"buffer": 0, "byteOffset": index_offset, "byteLength": len(index_bytes), "target": 34963},
-            ],
-            "accessors": [
-                {
-                    "bufferView": 0,
-                    "componentType": 5126,
-                    "count": len(self.positions),
-                    "type": "VEC3",
-                    "min": mins,
-                    "max": maxs,
-                },
-                {
-                    "bufferView": 1,
-                    "componentType": 5126,
-                    "count": len(self.normals),
-                    "type": "VEC3",
-                },
-                {
-                    "bufferView": 2,
-                    "componentType": 5123,
-                    "count": len(self.indices),
-                    "type": "SCALAR",
-                },
-            ],
+            "bufferViews": buffer_views,
+            "accessors": accessors,
         }
         json_chunk = _pad4(json.dumps(gltf, separators=(",", ":")).encode("utf-8"), pad_byte=b" ")
         bin_chunk = _pad4(binary)
@@ -549,6 +577,42 @@ def _normal(
     nz = ux * vy - uy * vx
     length = math.sqrt(nx * nx + ny * ny + nz * nz) or 1.0
     return (nx / length, ny / length, nz / length)
+
+
+def _gltf_materials() -> list[dict[str, object]]:
+    return [
+        {
+            "name": "measured terrain",
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [0.46, 0.56, 0.36, 1.0],
+                "roughnessFactor": 0.92,
+            },
+        },
+        {
+            "name": "observed buildings",
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [0.72, 0.74, 0.72, 1.0],
+                "roughnessFactor": 0.78,
+            },
+        },
+        {
+            "name": "observed roads",
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [0.12, 0.13, 0.14, 1.0],
+                "roughnessFactor": 0.86,
+            },
+        },
+        {
+            "name": "observed water",
+            "pbrMetallicRoughness": {
+                "baseColorFactor": [0.06, 0.34, 0.62, 0.72],
+                "metallicFactor": 0.0,
+                "roughnessFactor": 0.24,
+            },
+            "alphaMode": "BLEND",
+            "doubleSided": True,
+        },
+    ]
 
 
 def _pad4(data: bytes, pad_byte: bytes = b"\x00") -> bytes:

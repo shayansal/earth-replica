@@ -1,7 +1,14 @@
 import json
+import ssl
+import subprocess
+import sys
+from urllib.error import URLError
 
 from earth_replica.open_data_adapters import (
+    OsmContext,
     build_overpass_query,
+    _default_fetch_text,
+    features_from_osm_context,
     features_from_osm_overpass,
     features_from_overture_records,
     fetch_osm_features,
@@ -14,6 +21,7 @@ def test_build_overpass_query_requests_roads_water_parks_and_landuse():
 
     assert "[out:json]" in query
     assert 'way["highway"]' in query
+    assert 'way["building"]' in query
     assert 'way["natural"="water"]' in query
     assert 'way["natural"="coastline"]' in query
     assert 'way["leisure"="park"]' in query
@@ -70,6 +78,44 @@ def test_features_from_osm_overpass_converts_open_features():
     assert land_cover["vegetation"] > 0
 
 
+def test_features_from_osm_context_includes_building_footprints():
+    payload = {
+        "elements": [
+            {
+                "type": "way",
+                "id": 40,
+                "tags": {"building": "yes", "building:levels": "4"},
+                "geometry": [
+                    {"lon": -122.42, "lat": 37.77},
+                    {"lon": -122.419, "lat": 37.77},
+                    {"lon": -122.419, "lat": 37.771},
+                    {"lon": -122.42, "lat": 37.771},
+                    {"lon": -122.42, "lat": 37.77},
+                ],
+            },
+            {
+                "type": "way",
+                "id": 10,
+                "tags": {"highway": "residential"},
+                "geometry": [
+                    {"lon": -122.42, "lat": 37.77},
+                    {"lon": -122.41, "lat": 37.78},
+                ],
+            },
+        ],
+    }
+
+    context = features_from_osm_context(payload)
+
+    assert isinstance(context, OsmContext)
+    assert len(context.buildings) == 1
+    assert context.buildings[0].feature_id == "osm:building:40"
+    assert context.buildings[0].height_m == 12.8
+    assert context.buildings[0].provenance.domain == "buildings"
+    assert len(context.roads) == 1
+    assert context.land_cover["urban"] > 0
+
+
 def test_fetch_osm_features_uses_injected_fetcher():
     def fake_fetch(url: str, data: bytes, timeout_s: int) -> str:
         assert "overpass" in url
@@ -86,6 +132,37 @@ def test_fetch_osm_features_uses_injected_fetcher():
     assert roads == ()
     assert water == ()
     assert land_cover["urban"] == 0.0
+
+
+def test_default_osm_fetch_uses_windows_trust_store_for_certificate_errors(monkeypatch):
+    def fake_urlopen(*_args, **_kwargs):
+        raise URLError(ssl.SSLError("certificate verify failed"))
+
+    def fake_run(command, check, capture_output, text, timeout, env, encoding, errors):
+        assert command[0] == "powershell"
+        assert check is True
+        assert capture_output is True
+        assert text is True
+        assert timeout == 9
+        assert encoding == "utf-8"
+        assert errors == "replace"
+        assert env["EARTH_REPLICA_FETCH_URL"] == "https://overpass.example/api"
+        assert "data=" in env["EARTH_REPLICA_FETCH_BODY"]
+        assert "way%5B%22building%22%5D" in env["EARTH_REPLICA_FETCH_BODY"]
+        assert env["EARTH_REPLICA_USER_AGENT"].startswith("EarthReplica/")
+        return subprocess.CompletedProcess(command, 0, stdout='{"elements":[]}')
+
+    monkeypatch.setattr("earth_replica.open_data_adapters.urlopen", fake_urlopen)
+    monkeypatch.setattr("earth_replica.open_data_adapters.subprocess.run", fake_run)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    payload = _default_fetch_text(
+        "https://overpass.example/api",
+        b'way["building"];',
+        9,
+    )
+
+    assert payload == '{"elements":[]}'
 
 
 def test_features_from_overture_records_extracts_building_height_and_wkb():

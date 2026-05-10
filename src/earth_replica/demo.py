@@ -12,12 +12,18 @@ from earth_replica.simulation import (
 )
 
 
-def build_demo_cell(extent_m: float = 250.0) -> LocalGenesisCell:
+def build_demo_cell(
+    extent_m: float = 250.0,
+    *,
+    latitude: float = 37.7749,
+    longitude: float = -122.4194,
+    h3_index: str = "872830828ffffff",
+) -> LocalGenesisCell:
     cell = CellState(
-        h3_index="872830828ffffff",
+        h3_index=h3_index,
         resolution=7,
-        latitude=37.7749,
-        longitude=-122.4194,
+        latitude=latitude,
+        longitude=longitude,
         elevation_m=12.5,
         observed_at=datetime.now(UTC),
         fidelity="interactive",
@@ -32,9 +38,18 @@ def build_demo_cell(extent_m: float = 250.0) -> LocalGenesisCell:
 
 def build_demo_preview_simulation(
     steps_extent_m: float = 250.0,
+    *,
+    latitude: float = 37.7749,
+    longitude: float = -122.4194,
+    h3_index: str = "872830828ffffff",
 ) -> LocalPreviewSimulation:
     return LocalPreviewSimulation(
-        local_cell=build_demo_cell(extent_m=steps_extent_m),
+        local_cell=build_demo_cell(
+            extent_m=steps_extent_m,
+            latitude=latitude,
+            longitude=longitude,
+            h3_index=h3_index,
+        ),
         config=SimulationConfig(time_step_s=1.0 / 30.0),
         bodies=(
             PreviewBody(name="probe", position_m=(0.0, 0.0, 3.0)),

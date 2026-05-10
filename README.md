@@ -92,6 +92,15 @@ python examples/preview_simulation.py --steps 120 --output artifacts/preview.jso
 
 This emits `tileset.json`, `tile.glb`, `provenance.json`, and `genesis-terrain-patch.json`. The first worker uses local fixture geometry while preserving the production contract for Overture/OSM buildings, roads, land cover, terrain, bathymetry, and per-layer provenance.
 
+Build the measured golden tile used as the local visual and physics quality benchmark:
+
+```bash
+python examples/build_golden_tile.py --output artifacts/golden-tiles
+python examples/preview_simulation.py --steps 120 --lat 37.7955 --lon -122.3937 --output artifacts/preview.jsonl --html artifacts/cesium-preview.html --renderer cesium --open-tileset artifacts/golden-tiles/h3_7_872830828ffffff/tileset.json
+```
+
+This fetches bounded ETOPO terrain and OSM buildings/roads/water for one small waterfront WGS84 tile, emits distinct GLB materials for physical surface classes, writes provenance, and produces `golden-tile-quality.json` as the benchmark for future reconstruction work.
+
 Build the whole-planet ingestion manifest:
 
 ```bash

@@ -17,6 +17,23 @@ def test_run_preview_writes_jsonl_frames(tmp_path):
     assert all(record["h3_index"] == "872830828ffffff" for record in records)
 
 
+def test_run_preview_can_target_golden_tile_center(tmp_path):
+    output_path = tmp_path / "preview.jsonl"
+
+    returned_path = run_preview(
+        steps=1,
+        output_path=output_path,
+        center_latitude=37.7955,
+        center_longitude=-122.3937,
+        h3_index="golden-waterfront",
+    )
+
+    record = json.loads(returned_path.read_text(encoding="utf-8").strip())
+    assert record["h3_index"] == "golden-waterfront"
+    assert record["cell"]["center_latitude"] == 37.7955
+    assert record["cell"]["center_longitude"] == -122.3937
+
+
 def test_run_preview_can_write_html_viewer(tmp_path):
     output_path = tmp_path / "preview.jsonl"
     html_path = tmp_path / "preview.html"
