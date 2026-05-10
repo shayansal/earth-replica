@@ -346,17 +346,24 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const localVerticalExaggeration = 1;
     const localPhysicsEnterDistance = 8.8;
     const localPhysicsExitDistance = 14;
+    const physicalContextStartDistance = 22;
+    const physicalContextFullDistance = 7.2;
     const satelliteTextureUrl = "world.200407.3x5400x2700.jpg";
     const satelliteTextureCredit = "NASA Blue Marble satellite";
     const renderModeLabels = {
       global: "Global shell",
       regional: "Regional stream",
+      "physical-transition": "Physical transition",
       "local-physics": "Local physics",
     };
     let frameIndex = 0;
     let playing = true;
     let activeRenderMode = "global";
     let satelliteTextureLoaded = false;
+    let physicalContextBlend = 0;
+    let satelliteTextureCanvas = null;
+    let satelliteTextureContext = null;
+    let localContextGrid = [];
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x05070b);
@@ -453,6 +460,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const soilParticleMeshes = [];
     let localWaterMesh = null;
     let localSoilMesh = null;
+    let localVegetationGroup = null;
 
     slider.max = Math.max(0, frames.length - 1);
     loadLandWaterTexture();
@@ -778,6 +786,9 @@ _HTML_TEMPLATE = r"""<!doctype html>
           material.map = texture;
           material.needsUpdate = true;
           satelliteTextureLoaded = true;
+          captureSatelliteTexture(texture.image);
+          deriveLocalContextFromSatellite();
+          applyDerivedLocalContext();
           surfaceStatus.textContent = `${satelliteTextureCredit} + ETOPO relief`;
         },
         undefined,
@@ -785,6 +796,19 @@ _HTML_TEMPLATE = r"""<!doctype html>
           satelliteTextureLoaded = false;
         }
       );
+    }
+
+    function captureSatelliteTexture(image) {
+      const width = image.naturalWidth || image.width;
+      const height = image.naturalHeight || image.height;
+      if (!width || !height) {
+        return;
+      }
+      satelliteTextureCanvas = document.createElement("canvas");
+      satelliteTextureCanvas.width = width;
+      satelliteTextureCanvas.height = height;
+      satelliteTextureContext = satelliteTextureCanvas.getContext("2d", { willReadFrequently: true });
+      satelliteTextureContext.drawImage(image, 0, 0, width, height);
     }
 
     function nearestElevation(latitude, longitude) {
@@ -905,6 +929,9 @@ _HTML_TEMPLATE = r"""<!doctype html>
         new THREE.PlaneGeometry(9, 9, 64, 64),
         new THREE.MeshStandardMaterial({
           color: 0x7d6244,
+          vertexColors: true,
+          transparent: true,
+          opacity: 0,
           roughness: 0.96,
           metalness: 0,
         })
@@ -919,7 +946,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
         new THREE.MeshPhysicalMaterial({
           color: 0x2f9fd2,
           transparent: true,
-          opacity: 0.55,
+          opacity: 0,
           roughness: 0.18,
           metalness: 0.02,
           transmission: 0.18,
@@ -941,6 +968,8 @@ _HTML_TEMPLATE = r"""<!doctype html>
       );
       ridge.position.set(1.25, 0.08, -0.85);
       ridge.rotation.y = -0.28;
+      ridge.material.transparent = true;
+      ridge.material.opacity = 0;
       localPhysicsBubble.add(ridge);
 
       const fill = new THREE.HemisphereLight(0xaed8ff, 0x5a4028, 1.2);
@@ -949,7 +978,153 @@ _HTML_TEMPLATE = r"""<!doctype html>
       const gridHelper = new THREE.GridHelper(9, 18, 0x5b7f8c, 0x283d42);
       gridHelper.position.y = 0.001;
       localPhysicsBubble.add(gridHelper);
+      localVegetationGroup = new THREE.Group();
+      localPhysicsBubble.add(localVegetationGroup);
+      deriveLocalContextFromSatellite();
+      applyDerivedLocalContext();
       localPhysicsBubble.visible = false;
+    }
+
+    function deriveLocalContextFromSatellite() {
+      const frame = frames[frameIndex] || frames[0];
+      const centerLat = frame?.cell?.center_latitude ?? 0;
+      const centerLon = frame?.cell?.center_longitude ?? 0;
+      const spanDegrees = 1.4;
+      const gridSize = 11;
+      const cells = [];
+      for (let row = 0; row < gridSize; row += 1) {
+        for (let col = 0; col < gridSize; col += 1) {
+          const u = (col / (gridSize - 1)) * 2 - 1;
+          const v = (row / (gridSize - 1)) * 2 - 1;
+          const latitude = clamp(centerLat + v * spanDegrees * 0.5, -89.8, 89.8);
+          const longitude = wrapLongitude(centerLon + u * spanDegrees * 0.5);
+          const elevation = terrainTile?.grid ? nearestElevation(latitude, longitude) : 0;
+          const pixel = sampleSatellitePixel(latitude, longitude);
+          cells.push({
+            x: u * 4.2,
+            z: -v * 4.2,
+            latitude,
+            longitude,
+            elevation,
+            type: classifySatelliteContext(pixel, elevation),
+          });
+        }
+      }
+      localContextGrid = cells;
+      return cells;
+    }
+
+    function sampleSatellitePixel(latitude, longitude) {
+      if (!satelliteTextureContext || !satelliteTextureCanvas) {
+        const fallbackColor = new THREE.Color(terrainColor(terrainTile?.grid ? nearestElevation(latitude, longitude) : 0));
+        return {
+          r: Math.round(fallbackColor.r * 255),
+          g: Math.round(fallbackColor.g * 255),
+          b: Math.round(fallbackColor.b * 255),
+        };
+      }
+      const x = Math.floor(clamp((longitude + 180) / 360, 0, 0.9999) * satelliteTextureCanvas.width);
+      const y = Math.floor(clamp((90 - latitude) / 180, 0, 0.9999) * satelliteTextureCanvas.height);
+      const data = satelliteTextureContext.getImageData(x, y, 1, 1).data;
+      return { r: data[0], g: data[1], b: data[2] };
+    }
+
+    function classifySatelliteContext(pixel, elevation) {
+      if (elevation < -1) {
+        return "water";
+      }
+      const brightness = (pixel.r + pixel.g + pixel.b) / 3;
+      if (brightness > 205 && pixel.r > 180 && pixel.g > 180) {
+        return "snow";
+      }
+      if (pixel.g > pixel.r * 1.08 && pixel.g > pixel.b * 1.05) {
+        return "vegetation";
+      }
+      if (pixel.r > pixel.g * 1.08 && pixel.r > pixel.b * 1.05) {
+        return "soil";
+      }
+      return elevation > 1800 ? "rock" : "soil";
+    }
+
+    function applyDerivedLocalContext() {
+      if (!localSoilMesh || !localContextGrid.length) {
+        return;
+      }
+      const color = new THREE.Color();
+      const colors = [];
+      const positions = localSoilMesh.geometry.attributes.position;
+      for (let index = 0; index < positions.count; index += 1) {
+        const x = positions.getX(index);
+        const y = positions.getY(index);
+        const cell = nearestLocalContextCell(x, y);
+        color.set(localContextColor(cell.type, cell.elevation));
+        colors.push(color.r, color.g, color.b);
+      }
+      localSoilMesh.geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+      localSoilMesh.material.vertexColors = true;
+      localSoilMesh.material.needsUpdate = true;
+      buildVegetationFromContext();
+      updateLocalWaterFromContext();
+    }
+
+    function nearestLocalContextCell(x, z) {
+      let nearest = localContextGrid[0];
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      localContextGrid.forEach((cell) => {
+        const distance = ((cell.x - x) ** 2) + ((cell.z - z) ** 2);
+        if (distance < nearestDistance) {
+          nearest = cell;
+          nearestDistance = distance;
+        }
+      });
+      return nearest;
+    }
+
+    function localContextColor(type, elevation) {
+      if (type === "water") return 0x315f64;
+      if (type === "vegetation") return elevation > 700 ? 0x3f6f35 : 0x2f7d42;
+      if (type === "snow") return 0xdde6dc;
+      if (type === "rock") return 0x7f7b70;
+      return 0x78684f;
+    }
+
+    function buildVegetationFromContext() {
+      if (!localVegetationGroup) {
+        return;
+      }
+      localVegetationGroup.clear();
+      const vegetationCells = localContextGrid
+        .filter((cell, index) => cell.type === "vegetation" && index % 2 === 0)
+        .slice(0, 42);
+      const trunkMaterial = new THREE.MeshStandardMaterial({
+        color: 0x5d4429,
+        roughness: 0.92,
+        transparent: true,
+        opacity: physicalContextBlend,
+      });
+      const canopyMaterial = new THREE.MeshStandardMaterial({
+        color: 0x2f7d42,
+        roughness: 0.86,
+        transparent: true,
+        opacity: physicalContextBlend,
+      });
+      vegetationCells.forEach((cell, index) => {
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.026, 0.22, 6), trunkMaterial.clone());
+        trunk.position.set(cell.x, 0.08, cell.z);
+        const canopy = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.34, 7), canopyMaterial.clone());
+        canopy.position.set(cell.x + ((index % 3) - 1) * 0.035, 0.33, cell.z);
+        localVegetationGroup.add(trunk, canopy);
+      });
+    }
+
+    function updateLocalWaterFromContext() {
+      if (!localWaterMesh || !localContextGrid.length) {
+        return;
+      }
+      const waterFraction = localContextGrid.filter((cell) => cell.type === "water").length / localContextGrid.length;
+      const scale = clamp(0.55 + waterFraction * 1.35, 0.55, 1.45);
+      localWaterMesh.scale.set(scale, scale, 1);
+      localWaterMesh.visible = waterFraction > 0.04;
     }
 
     function applyLocalSoilRelief(geometry) {
@@ -1137,59 +1312,111 @@ _HTML_TEMPLATE = r"""<!doctype html>
       activeRenderMode = mode;
       modeValue.textContent = renderModeLabels[activeRenderMode];
       if (mode === "local-physics") {
-        earth.visible = false;
-        atmosphere.visible = false;
-        grid.visible = false;
-        coastlineGroup.visible = false;
-        terrainGroup.visible = false;
-        surfaceGroup.visible = false;
-        bodyGroup.visible = false;
-        cellMarker.visible = false;
-        localTerrainGroup.visible = false;
-        localPhysicsBubble.visible = true;
-        physicsGroup.visible = true;
+        setPhysicalContextBlend(1);
         controls.autoRotate = false;
         controls.minDistance = 2.5;
         controls.maxDistance = 18;
-        controls.target.set(0, 0, 0);
-        camera.position.set(0, 3.2, 7.4);
-        camera.lookAt(controls.target);
-        terrainScale.textContent = "physics bubble";
-        verticalScale.textContent = "Genesis local";
         return;
       }
       if (mode === "regional") {
-        localPhysicsBubble.visible = false;
-        physicsGroup.visible = Boolean(physicsFrames?.frames?.length);
+        setPhysicalContextBlend(0.45);
         controls.autoRotate = false;
-        modeValue.textContent = renderModeLabels.regional;
         return;
       }
-      enableGlobalTerrainMode();
-      modeValue.textContent = renderModeLabels.global;
+      setPhysicalContextBlend(0);
     }
 
     function updateRenderModeFromCamera() {
       if (!physicsFrames?.frames?.length || !isGlobalTerrainTile()) {
         return;
       }
+      updatePhysicalContextBlend();
+    }
+
+    function updatePhysicalContextBlend() {
       const distance = camera.position.distanceTo(controls.target);
-      if (activeRenderMode !== "local-physics" && distance <= localPhysicsEnterDistance) {
-        setRenderMode("local-physics");
-        drawFrame(frameIndex);
-        return;
+      const normalized = clamp(
+        (physicalContextStartDistance - distance) /
+          (physicalContextStartDistance - physicalContextFullDistance),
+        0,
+        1
+      );
+      setPhysicalContextBlend(smoothstep(normalized));
+    }
+
+    function setPhysicalContextBlend(blend) {
+      physicalContextBlend = clamp(blend, 0, 1);
+      const hasLocalContext = physicalContextBlend > 0.025;
+      terrainGroup.visible = Boolean(terrainTile?.grid);
+      localTerrainGroup.visible = false;
+      localPhysicsBubble.visible = hasLocalContext;
+      physicsGroup.visible = Boolean(physicsFrames?.frames?.length);
+      bodyGroup.visible = false;
+      cellMarker.visible = false;
+      surfaceGroup.visible = false;
+      grid.visible = false;
+      coastlineGroup.visible = false;
+      earth.visible = !terrainTile?.grid;
+      atmosphere.visible = true;
+
+      if (terrainMesh?.material) {
+        terrainMesh.material.transparent = physicalContextBlend > 0;
+        terrainMesh.material.opacity = 1 - physicalContextBlend * 0.88;
+        terrainMesh.material.needsUpdate = true;
       }
-      if (activeRenderMode === "local-physics" && distance >= localPhysicsExitDistance) {
-        setRenderMode("global");
-        drawFrame(frameIndex);
-        return;
+      if (atmosphere.material) {
+        atmosphere.material.opacity = 0.12 * (1 - physicalContextBlend * 0.85);
       }
-      if (activeRenderMode === "global" && distance <= 18 && distance > localPhysicsEnterDistance) {
-        setRenderMode("regional");
+      setGroupOpacity(localPhysicsBubble, physicalContextBlend);
+      if (localWaterMesh?.material) {
+        localWaterMesh.material.opacity = 0.55 * physicalContextBlend;
       }
-      if (activeRenderMode === "regional" && distance > 22) {
-        setRenderMode("global");
+      localPhysicsBubble.scale.setScalar(0.68 + physicalContextBlend * 0.32);
+      localPhysicsBubble.position.y = -0.18 * (1 - physicalContextBlend);
+
+      if (physicalContextBlend >= 0.92) {
+        activeRenderMode = "local-physics";
+        modeValue.textContent = renderModeLabels["local-physics"];
+        terrainScale.textContent = "data-derived physics";
+        verticalScale.textContent = "Genesis local";
+      } else if (physicalContextBlend > 0.06) {
+        activeRenderMode = "physical-transition";
+        modeValue.textContent = renderModeLabels["physical-transition"];
+        terrainScale.textContent = "satellite + ETOPO context";
+        verticalScale.textContent = `${Math.round(physicalContextBlend * 100)}% physical`;
+      } else {
+        activeRenderMode = "global";
+        modeValue.textContent = renderModeLabels.global;
+        terrainScale.textContent = "ETOPO visual relief";
+        verticalScale.textContent = "global bump map";
       }
+    }
+
+    function setGroupOpacity(group, opacity) {
+      group.traverse((child) => {
+        if (!child.material) {
+          return;
+        }
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        materials.forEach((material) => {
+          material.transparent = true;
+          material.opacity = opacity;
+          material.needsUpdate = true;
+        });
+      });
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function smoothstep(value) {
+      const x = clamp(value, 0, 1);
+      return x * x * (3 - 2 * x);
+    }
+
+    function wrapLongitude(longitude) {
+      return ((((longitude + 180) % 360) + 360) % 360) - 180;
     }
 
     function terrainColor(elevation) {
@@ -1373,7 +1600,11 @@ _HTML_TEMPLATE = r"""<!doctype html>
       frameLabel.textContent = `Frame ${index + 1} / ${frames.length}`;
       slider.value = String(index);
       if (activeRenderMode === "local-physics") {
-        legend.innerHTML = `<div class="body-row"><strong style="color:#4cc9ff">Active local physics bubble</strong>Genesis water and soil particles are rendered in a ground-level scene around the camera; zoom out to return to the global visual shell</div>${physicsLegendRows()}`;
+        legend.innerHTML = `<div class="body-row"><strong style="color:#4cc9ff">Active local physical context</strong>Genesis water and soil particles are rendered over a satellite/ETOPO-derived tile with water, soil, rock, snow, and vegetation classes inferred from the focused Earth location</div>${physicsLegendRows()}`;
+        return;
+      }
+      if (activeRenderMode === "physical-transition") {
+        legend.innerHTML = `<div class="body-row"><strong style="color:#4cc9ff">Continuous physical context</strong>the satellite globe remains visible while the local Genesis layer fades in from ${Math.round(physicalContextBlend * 100)}% context strength; material classes are inferred from satellite color and ETOPO elevation</div>${physicsLegendRows()}`;
         return;
       }
       if (terrainTile && isGlobalTerrainTile()) {
