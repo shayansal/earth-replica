@@ -146,6 +146,12 @@ def test_render_preview_html_supports_global_terrain_mode(tmp_path):
     assert "nearestElevation" in html
     assert "enableGlobalTerrainMode" in html
     assert "Global ETOPO relief mesh" in html
+    assert (
+        'function enableGlobalTerrainMode() {\n      activeRenderMode = "global";\n'
+        "      earth.visible = false;\n      atmosphere.visible = true;\n"
+        "      grid.visible = false;"
+    ) in html
+    assert "coastlineGroup.visible = false;\n      terrainGroup.visible = true;" in html
     assert 'terrainScale.textContent = "ETOPO visual relief"' in html
     assert 'verticalScale.textContent = "global bump map"' in html
     assert "if (terrainTile && !isGlobalTerrainTile())" in html
