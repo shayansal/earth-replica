@@ -83,6 +83,15 @@ GOOGLE_MAPS_API_KEY=your-key-here
 
 The Cesium viewer is the path toward high-fidelity Earth quality: photorealistic 3D Tiles, world terrain, semantic city-scale geometry, and WGS84-anchored Genesis physics shards. See [docs/realistic-earth-stack.md](docs/realistic-earth-stack.md).
 
+Build one local open-data 3D Tiles shard and Genesis-ready terrain patch:
+
+```bash
+python examples/build_open_tile.py --output artifacts/open-tiles
+python examples/preview_simulation.py --steps 120 --output artifacts/preview.jsonl --html artifacts/cesium-preview.html --renderer cesium --open-tileset artifacts/open-tiles/h3_7_872830828ffffff/tileset.json
+```
+
+This emits `tileset.json`, `tile.glb`, `provenance.json`, and `genesis-terrain-patch.json`. The first worker uses local fixture geometry while preserving the production contract for Overture/OSM buildings, roads, land cover, terrain, bathymetry, and per-layer provenance.
+
 Fetch a coarse global NOAA ETOPO 2022 relief grid and embed it in the preview:
 
 ```bash

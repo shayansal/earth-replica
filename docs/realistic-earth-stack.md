@@ -50,6 +50,23 @@ Important rule: AI-enhanced geometry or textures must be marked as inferred. Obs
 4. **Validation and provenance:** per-tile source metadata, confidence scores, temporal stamps, and observed/inferred/simulated/rendered separation.
 5. **Physics coupling:** Genesis local shards receive WGS84 anchor, terrain patch, material map, weather/ocean state, and return deformation/water/soil state as local overlays.
 
+## Open Tile Worker Contract
+
+The first open tile worker accepts a bounded WGS84 tile request and emits:
+
+- `tileset.json`: 3D Tiles 1.1 manifest with a WGS84 region, local ENU transform, and `tile.glb` content.
+- `tile.glb`: generated local glTF/GLB geometry for the terrain patch and clipped features.
+- `provenance.json`: explicit observed, inferred, simulated, and rendered records for every layer.
+- `genesis-terrain-patch.json`: terrain grid, material map, water/building/road obstacles, and the Genesis physics output contract.
+
+Production adapters should replace the fixture features in `examples/build_open_tile.py` with:
+
+- Overture Maps buildings and places.
+- OpenStreetMap roads and water features.
+- ETOPO/GEBCO/other DEM and bathymetry sources.
+- land-cover and material classifiers.
+- optional DSM/point-cloud derived building heights.
+
 ## AI Earth Context
 
 Use TerraMind as the semantic Earth-observation model layer. TerraMind should run as a Python service that accepts a geospatial tile request and returns land-cover/material context, such as water, vegetation, soil, snow, rock, urban, flood, burn scars, or crop state.

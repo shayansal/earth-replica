@@ -76,3 +76,23 @@ def test_run_preview_can_write_cesium_html_viewer(tmp_path):
     html = html_path.read_text(encoding="utf-8")
     assert "Earth Replica Cesium Preview" in html
     assert "Google Photorealistic 3D Tiles" in html
+
+
+def test_run_preview_can_link_open_tileset(tmp_path):
+    output_path = tmp_path / "preview.jsonl"
+    html_path = tmp_path / "preview.html"
+    tileset_path = tmp_path / "open-tiles" / "h3_7_872830828ffffff" / "tileset.json"
+    tileset_path.parent.mkdir(parents=True)
+    tileset_path.write_text('{"asset":{"version":"1.1"}}', encoding="utf-8")
+
+    run_preview(
+        steps=3,
+        output_path=output_path,
+        html_path=html_path,
+        renderer="cesium",
+        open_tileset_path=tileset_path,
+    )
+
+    assert "open-tiles/h3_7_872830828ffffff/tileset.json" in html_path.read_text(
+        encoding="utf-8"
+    )

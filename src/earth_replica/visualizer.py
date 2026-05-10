@@ -26,6 +26,7 @@ def render_preview_html(
     terrain_path: Path | None = None,
     physics_path: Path | None = None,
     renderer: str = "maplibre",
+    open_tileset_path: Path | None = None,
 ) -> Path:
     if renderer not in {"maplibre", "cesium"}:
         raise ValueError("renderer must be one of: maplibre, cesium")
@@ -62,6 +63,9 @@ def render_preview_html(
         ).replace(
             "__GOOGLE_MAPS_API_KEY_JSON__",
             json.dumps(_load_env_value(output_path, "GOOGLE_MAPS_API_KEY")),
+        ).replace(
+            "__OPEN_TILESET_URI_JSON__",
+            json.dumps(_asset_uri(output_path, open_tileset_path)),
         )
     output_path.write_text(html, encoding="utf-8")
     return output_path
@@ -83,6 +87,15 @@ def _load_env_value(output_path: Path, key: str) -> str:
             if line.startswith(f"{key}="):
                 return line.split("=", 1)[1].strip().strip('"').strip("'")
     return ""
+
+
+def _asset_uri(output_path: Path, asset_path: Path | None) -> str:
+    if asset_path is None:
+        return ""
+    try:
+        return asset_path.resolve().relative_to(output_path.resolve().parent).as_posix()
+    except ValueError:
+        return asset_path.resolve().as_uri()
 
 
 _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
@@ -622,6 +635,7 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
     const physicsFrames = JSON.parse(document.getElementById("physics-frames-data").textContent);
     const cesiumIonToken = __CESIUM_ION_TOKEN_JSON__;
     const googleMapsApiKey = __GOOGLE_MAPS_API_KEY_JSON__;
+    const openTilesetUri = __OPEN_TILESET_URI_JSON__;
     const focusFrame = frames[0];
     const focusLatitude = Number(focusFrame.cell.center_latitude || 0);
     const focusLongitude = Number(focusFrame.cell.center_longitude || 0);
@@ -667,6 +681,28 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
         }
       }
 
+      if (openTilesetUri) {
+        try {
+          const localTiles = await Cesium.Cesium3DTileset.fromUrl(openTilesetUri);
+          viewer.scene.primitives.add(localTiles);
+          document.getElementById("tilesValue").textContent = "Local open 3D Tiles";
+        } catch (error) {
+          console.warn("Local open 3D Tiles unavailable; using fallback globe.", error);
+          await addPhotorealisticOrFallback(viewer);
+        }
+      } else {
+        await addPhotorealisticOrFallback(viewer);
+      }
+
+      addGenesisAnchor(viewer);
+      updateLegend();
+      flyOrbit(viewer);
+
+      document.getElementById("focusButton").addEventListener("click", () => flyFocus(viewer));
+      document.getElementById("orbitButton").addEventListener("click", () => flyOrbit(viewer));
+    }
+
+    async function addPhotorealisticOrFallback(viewer) {
       if (googleMapsApiKey) {
         try {
           const photorealisticTiles = await Cesium.Cesium3DTileset.fromUrl(
@@ -682,13 +718,6 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
       } else {
         await addFallbackBuildings(viewer);
       }
-
-      addGenesisAnchor(viewer);
-      updateLegend();
-      flyOrbit(viewer);
-
-      document.getElementById("focusButton").addEventListener("click", () => flyFocus(viewer));
-      document.getElementById("orbitButton").addEventListener("click", () => flyOrbit(viewer));
     }
 
     async function addFallbackBuildings(viewer) {

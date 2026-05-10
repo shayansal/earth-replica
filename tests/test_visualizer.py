@@ -306,6 +306,42 @@ def test_render_preview_html_can_emit_cesium_3d_tiles_preview(tmp_path):
     assert 'const googleMapsApiKey = "";' in html
 
 
+def test_render_preview_html_can_link_local_open_tileset(tmp_path):
+    frames_path = tmp_path / "preview.jsonl"
+    output_path = tmp_path / "preview.html"
+    tileset_path = tmp_path / "open" / "h3_7_872830828ffffff" / "tileset.json"
+    tileset_path.parent.mkdir(parents=True)
+    tileset_path.write_text('{"asset":{"version":"1.1"}}', encoding="utf-8")
+    frames_path.write_text(
+        json.dumps(
+            {
+                "h3_index": "872830828ffffff",
+                "planet": {"mean_radius_m": 6371008.8},
+                "cell": {
+                    "center_latitude": 37.7749,
+                    "center_longitude": -122.4194,
+                },
+                "step": 1,
+                "time_s": 0.033,
+                "bodies": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    render_preview_html(
+        frames_path,
+        output_path,
+        renderer="cesium",
+        open_tileset_path=tileset_path,
+    )
+    html = output_path.read_text(encoding="utf-8")
+
+    assert 'const openTilesetUri = "open/h3_7_872830828ffffff/tileset.json";' in html
+    assert "Local open 3D Tiles" in html
+    assert "openTilesetUri" in html
+
+
 def test_render_preview_html_rejects_unknown_renderer(tmp_path):
     frames_path = tmp_path / "preview.jsonl"
     output_path = tmp_path / "preview.html"

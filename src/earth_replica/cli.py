@@ -17,6 +17,7 @@ def run_preview(
     terrain_path: Path | None = None,
     physics_path: Path | None = None,
     renderer: str = "maplibre",
+    open_tileset_path: Path | None = None,
 ) -> Path:
     if steps <= 0:
         raise ValueError("steps must be positive")
@@ -37,6 +38,7 @@ def run_preview(
             terrain_path=terrain_path,
             physics_path=physics_path,
             renderer=renderer,
+            open_tileset_path=open_tileset_path,
         )
 
     return output_path
@@ -80,6 +82,12 @@ def main() -> None:
         default="maplibre",
         help="HTML renderer to use for the preview.",
     )
+    parser.add_argument(
+        "--open-tileset",
+        type=Path,
+        default=None,
+        help="Optional local 3D Tiles tileset.json to load in the Cesium viewer.",
+    )
     args = parser.parse_args()
 
     output_path = run_preview(
@@ -89,6 +97,7 @@ def main() -> None:
         terrain_path=args.terrain,
         physics_path=args.physics,
         renderer=args.renderer,
+        open_tileset_path=args.open_tileset,
     )
     print(f"Wrote preview frames to {output_path}")
     if args.html is not None:
