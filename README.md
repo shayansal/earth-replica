@@ -68,6 +68,21 @@ MAPTILER_API_KEY=your-key-here
 
 Without that key, the preview falls back to public satellite imagery and demo DEM terrain. The known elevation/bathymetry records still embed meter-based provenance for validation. See [docs/surface-model.md](docs/surface-model.md).
 
+Run the Cesium/3D Tiles-ready preview path:
+
+```bash
+python examples/preview_simulation.py --steps 120 --output artifacts/preview.jsonl --html artifacts/cesium-preview.html --renderer cesium
+```
+
+Optional `.env` values unlock richer Cesium layers:
+
+```bash
+CESIUM_ION_TOKEN=your-token-here
+GOOGLE_MAPS_API_KEY=your-key-here
+```
+
+The Cesium viewer is the path toward high-fidelity Earth quality: photorealistic 3D Tiles, world terrain, semantic city-scale geometry, and WGS84-anchored Genesis physics shards. See [docs/realistic-earth-stack.md](docs/realistic-earth-stack.md).
+
 Fetch a coarse global NOAA ETOPO 2022 relief grid and embed it in the preview:
 
 ```bash

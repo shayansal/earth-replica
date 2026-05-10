@@ -8,6 +8,11 @@ Use CesiumJS and 3D Tiles as the primary Earth renderer for high-fidelity globe 
 
 Keep Three.js for local experimental visualization and Genesis coupling only where we need custom physics rendering that Cesium does not own.
 
+The local preview now supports two renderer modes:
+
+- `maplibre`: lightweight satellite globe and DEM preview for fast iteration.
+- `cesium`: 3D Tiles-ready globe path for photorealistic reconstruction, WGS84 anchoring, and future city-scale geometry streaming.
+
 ## Photorealistic Data
 
 Preferred target:
@@ -17,6 +22,33 @@ Preferred target:
 - Open fallback layers: NASA Blue Marble, NOAA ETOPO, OGC/WMTS/WMS layers, OpenStreetMap-derived vectors/buildings.
 
 The production renderer must stream real terrain and imagery tiles rather than drawing a separate local plate. Local effects should be clamped to the globe surface or to a true georeferenced 3D tile location.
+
+## High-Fidelity Reconstruction Pipeline
+
+Earth Replica should pursue lifelike global quality through an open, modular pipeline:
+
+```text
+multi-view imagery + DEM/DSM
+-> radiometric correction, cloud/shadow masking, change detection
+-> dense point cloud or depth inference
+-> semantic segmentation for roads, water, soil, vegetation, structures
+-> footprint extraction and height estimation
+-> mesh/building/terrain generation
+-> texture synthesis from real imagery
+-> 3D Tiles packaging with LOD and provenance
+-> Cesium streaming
+-> Genesis local physics shard anchored to WGS84
+```
+
+Important rule: AI-enhanced geometry or textures must be marked as inferred. Observed imagery, measured DEM/DSM values, and simulated Genesis state must keep separate provenance so the project never confuses generated detail with source truth.
+
+## Build Phases
+
+1. **Renderer foundation:** CesiumJS preview, satellite fallback imagery, optional Cesium ion terrain/buildings, optional Google Photorealistic 3D Tiles, and Genesis shard anchoring.
+2. **Open 3D context:** Overture/OSM buildings, roads, places, land-cover classes, and terrain/bathymetry converted into local 3D Tiles.
+3. **AI reconstruction:** tile workers for cloud/shadow removal, DSM/DEM fusion, footprint refinement, height estimation, material classification, and texture generation.
+4. **Validation and provenance:** per-tile source metadata, confidence scores, temporal stamps, and observed/inferred/simulated/rendered separation.
+5. **Physics coupling:** Genesis local shards receive WGS84 anchor, terrain patch, material map, weather/ocean state, and return deformation/water/soil state as local overlays.
 
 ## AI Earth Context
 

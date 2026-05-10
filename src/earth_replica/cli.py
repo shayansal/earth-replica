@@ -16,6 +16,7 @@ def run_preview(
     html_path: Path | None = None,
     terrain_path: Path | None = None,
     physics_path: Path | None = None,
+    renderer: str = "maplibre",
 ) -> Path:
     if steps <= 0:
         raise ValueError("steps must be positive")
@@ -35,6 +36,7 @@ def run_preview(
             html_path,
             terrain_path=terrain_path,
             physics_path=physics_path,
+            renderer=renderer,
         )
 
     return output_path
@@ -72,6 +74,12 @@ def main() -> None:
         default=None,
         help="Optional Genesis shard physics JSON to embed in the HTML viewer.",
     )
+    parser.add_argument(
+        "--renderer",
+        choices=("maplibre", "cesium"),
+        default="maplibre",
+        help="HTML renderer to use for the preview.",
+    )
     args = parser.parse_args()
 
     output_path = run_preview(
@@ -80,6 +88,7 @@ def main() -> None:
         html_path=args.html,
         terrain_path=args.terrain,
         physics_path=args.physics,
+        renderer=args.renderer,
     )
     print(f"Wrote preview frames to {output_path}")
     if args.html is not None:

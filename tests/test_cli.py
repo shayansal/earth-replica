@@ -60,3 +60,19 @@ def test_run_preview_can_embed_physics_artifact(tmp_path):
     html = html_path.read_text(encoding="utf-8")
     assert "Genesis local physics shard" in html
     assert "water samples" in html
+
+
+def test_run_preview_can_write_cesium_html_viewer(tmp_path):
+    output_path = tmp_path / "preview.jsonl"
+    html_path = tmp_path / "cesium-preview.html"
+
+    run_preview(
+        steps=3,
+        output_path=output_path,
+        html_path=html_path,
+        renderer="cesium",
+    )
+
+    html = html_path.read_text(encoding="utf-8")
+    assert "Earth Replica Cesium Preview" in html
+    assert "Google Photorealistic 3D Tiles" in html

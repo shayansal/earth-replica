@@ -266,3 +266,69 @@ def test_render_preview_html_has_natural_zoom_to_georeferenced_physics_context(t
     assert "CircleGeometry" not in html
     assert "PlaneGeometry" not in html
     assert "ConeGeometry" not in html
+
+
+def test_render_preview_html_can_emit_cesium_3d_tiles_preview(tmp_path):
+    frames_path = tmp_path / "preview.jsonl"
+    output_path = tmp_path / "cesium-preview.html"
+    frames_path.write_text(
+        json.dumps(
+            {
+                "h3_index": "872830828ffffff",
+                "planet": {"mean_radius_m": 6371008.8},
+                "cell": {
+                    "center_latitude": 37.7749,
+                    "center_longitude": -122.4194,
+                },
+                "step": 1,
+                "time_s": 0.033,
+                "bodies": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    returned_path = render_preview_html(frames_path, output_path, renderer="cesium")
+    html = returned_path.read_text(encoding="utf-8")
+
+    assert returned_path == output_path
+    assert "Earth Replica Cesium Preview" in html
+    assert "CesiumJS" in html
+    assert "Cesium.Cesium3DTileset.fromUrl" in html
+    assert "Google Photorealistic 3D Tiles" in html
+    assert "createOsmBuildingsAsync" in html
+    assert "Genesis physics shard anchor" in html
+    assert "WGS84" in html
+    assert "872830828ffffff" in html
+    assert "__CESIUM_ION_TOKEN_JSON__" not in html
+    assert "__GOOGLE_MAPS_API_KEY_JSON__" not in html
+    assert 'const cesiumIonToken = "";' in html
+    assert 'const googleMapsApiKey = "";' in html
+
+
+def test_render_preview_html_rejects_unknown_renderer(tmp_path):
+    frames_path = tmp_path / "preview.jsonl"
+    output_path = tmp_path / "preview.html"
+    frames_path.write_text(
+        json.dumps(
+            {
+                "h3_index": "872830828ffffff",
+                "planet": {"mean_radius_m": 6371008.8},
+                "cell": {
+                    "center_latitude": 0.0,
+                    "center_longitude": 0.0,
+                },
+                "step": 1,
+                "time_s": 0.033,
+                "bodies": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        render_preview_html(frames_path, output_path, renderer="unknown")
+    except ValueError as error:
+        assert "renderer must be one of" in str(error)
+    else:
+        raise AssertionError("render_preview_html accepted an unknown renderer")

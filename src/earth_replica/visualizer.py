@@ -25,7 +25,10 @@ def render_preview_html(
     output_path: Path,
     terrain_path: Path | None = None,
     physics_path: Path | None = None,
+    renderer: str = "maplibre",
 ) -> Path:
+    if renderer not in {"maplibre", "cesium"}:
+        raise ValueError("renderer must be one of: maplibre, cesium")
     frames = load_preview_frames(frames_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame_json = json.dumps(frames, separators=(",", ":")).replace("</", "<\\/")
@@ -39,24 +42,37 @@ def render_preview_html(
     physics_json = "null"
     if physics_path is not None:
         physics_json = physics_path.read_text(encoding="utf-8").replace("</", "<\\/")
-    output_path.write_text(
-        _MAPLIBRE_HTML_TEMPLATE.replace("__FRAMES_JSON__", frame_json).replace(
+    template = _MAPLIBRE_HTML_TEMPLATE if renderer == "maplibre" else _CESIUM_HTML_TEMPLATE
+    html = template.replace("__FRAMES_JSON__", frame_json).replace(
             "__SURFACE_SAMPLES_JSON__",
             surface_json,
         ).replace("__TERRAIN_TILE_JSON__", terrain_json).replace(
             "__PHYSICS_FRAMES_JSON__",
             physics_json,
-        ).replace(
+        )
+    if renderer == "maplibre":
+        html = html.replace(
             "__MAPTILER_API_KEY_JSON__",
             json.dumps(_load_maptiler_api_key(output_path)),
-        ),
-        encoding="utf-8",
-    )
+        )
+    else:
+        html = html.replace(
+            "__CESIUM_ION_TOKEN_JSON__",
+            json.dumps(_load_env_value(output_path, "CESIUM_ION_TOKEN")),
+        ).replace(
+            "__GOOGLE_MAPS_API_KEY_JSON__",
+            json.dumps(_load_env_value(output_path, "GOOGLE_MAPS_API_KEY")),
+        )
+    output_path.write_text(html, encoding="utf-8")
     return output_path
 
 
 def _load_maptiler_api_key(output_path: Path) -> str:
-    env_value = os.environ.get("MAPTILER_API_KEY", "").strip()
+    return _load_env_value(output_path, "MAPTILER_API_KEY")
+
+
+def _load_env_value(output_path: Path, key: str) -> str:
+    env_value = os.environ.get(key, "").strip()
     if env_value:
         return env_value
     for directory in (output_path.resolve().parent, *output_path.resolve().parents):
@@ -64,7 +80,7 @@ def _load_maptiler_api_key(output_path: Path) -> str:
         if not env_path.exists():
             continue
         for line in env_path.read_text(encoding="utf-8").splitlines():
-            if line.startswith("MAPTILER_API_KEY="):
+            if line.startswith(f"{key}="):
                 return line.split("=", 1)[1].strip().strip('"').strip("'")
     return ""
 
@@ -416,6 +432,354 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
           geometry: { type: "Polygon", coordinates: [coordinates] },
         }],
       };
+    }
+  </script>
+</body>
+</html>
+"""
+
+
+_CESIUM_HTML_TEMPLATE = r"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Earth Replica Cesium Preview</title>
+  <link rel="stylesheet" href="https://cesium.com/downloads/cesiumjs/releases/1.127/Build/Cesium/Widgets/widgets.css">
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.127/Build/Cesium/Cesium.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --glass: rgba(7, 10, 15, 0.78);
+      --text: #eef6ff;
+      --muted: #b6c2cf;
+      --line: rgba(148, 171, 195, 0.22);
+      --accent: #66b7ff;
+    }
+    html, body, #cesiumContainer {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #03060a;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+    }
+    .hud {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      right: 20px;
+      z-index: 2;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      pointer-events: none;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: clamp(24px, 3vw, 42px);
+      letter-spacing: 0;
+      text-shadow: 0 2px 24px rgba(0,0,0,0.86);
+    }
+    .subtitle {
+      margin: 0;
+      max-width: 560px;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 14px;
+      text-shadow: 0 2px 18px rgba(0,0,0,0.9);
+    }
+    .stats {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      max-width: 760px;
+    }
+    .stat, .legend, .controls {
+      background: var(--glass);
+      border: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+      box-shadow: 0 18px 50px rgba(0,0,0,0.28);
+    }
+    .stat {
+      min-width: 128px;
+      padding: 11px 13px;
+      border-radius: 8px;
+    }
+    .stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 4px;
+    }
+    .stat strong {
+      display: block;
+      font-size: 15px;
+      white-space: nowrap;
+    }
+    .legend {
+      position: fixed;
+      right: 20px;
+      bottom: 28px;
+      z-index: 2;
+      width: min(470px, calc(100vw - 40px));
+      border-radius: 8px;
+      padding: 16px 18px;
+      color: #c7d3df;
+      line-height: 1.45;
+      font-size: 13px;
+      pointer-events: none;
+    }
+    .body-row {
+      padding: 9px 0;
+      border-bottom: 1px solid rgba(148, 171, 195, 0.14);
+    }
+    .body-row:last-child {
+      border-bottom: 0;
+    }
+    .body-row strong {
+      display: block;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+    .controls {
+      position: fixed;
+      left: 20px;
+      bottom: 20px;
+      z-index: 2;
+      display: flex;
+      gap: 10px;
+      border-radius: 8px;
+      padding: 10px;
+    }
+    button {
+      appearance: none;
+      border: 1px solid rgba(102, 183, 255, 0.35);
+      background: rgba(18, 58, 74, 0.82);
+      color: var(--text);
+      padding: 9px 13px;
+      border-radius: 6px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .cesium-widget-credits {
+      right: 12px;
+      bottom: 8px;
+    }
+    @media (max-width: 760px) {
+      .hud {
+        flex-direction: column;
+      }
+      .stats {
+        justify-content: flex-start;
+      }
+      .legend {
+        left: 12px;
+        right: 12px;
+        bottom: 84px;
+        width: auto;
+      }
+      .controls {
+        left: 12px;
+        right: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="cesiumContainer" aria-label="Earth Replica Cesium 3D Tiles preview"></div>
+  <section class="hud">
+    <div>
+      <h1>Earth Replica Cesium Preview</h1>
+      <p class="subtitle">CesiumJS globe path for photorealistic 3D Tiles, WGS84 terrain, and Genesis physics shard anchoring.</p>
+    </div>
+    <div class="stats">
+      <div class="stat"><span>Renderer</span><strong>CesiumJS</strong></div>
+      <div class="stat"><span>Mode</span><strong id="modeValue">3D globe</strong></div>
+      <div class="stat"><span>3D Tiles</span><strong id="tilesValue">Open fallback</strong></div>
+      <div class="stat"><span>Terrain</span><strong id="terrainValue">Ellipsoid</strong></div>
+      <div class="stat"><span>Physics</span><strong id="physicsValue">Surface anchor</strong></div>
+    </div>
+  </section>
+  <section id="legend" class="legend" aria-live="polite"></section>
+  <section class="controls">
+    <button id="focusButton" type="button">Focus Physics Area</button>
+    <button id="orbitButton" type="button">Orbit Globe</button>
+  </section>
+
+  <script id="frames-data" type="application/json">__FRAMES_JSON__</script>
+  <script id="surface-samples-data" type="application/json">__SURFACE_SAMPLES_JSON__</script>
+  <script id="terrain-tile-data" type="application/json">__TERRAIN_TILE_JSON__</script>
+  <script id="physics-frames-data" type="application/json">__PHYSICS_FRAMES_JSON__</script>
+  <script>
+    const frames = JSON.parse(document.getElementById("frames-data").textContent);
+    const surfaceSamples = JSON.parse(document.getElementById("surface-samples-data").textContent);
+    const terrainTile = JSON.parse(document.getElementById("terrain-tile-data").textContent);
+    const physicsFrames = JSON.parse(document.getElementById("physics-frames-data").textContent);
+    const cesiumIonToken = __CESIUM_ION_TOKEN_JSON__;
+    const googleMapsApiKey = __GOOGLE_MAPS_API_KEY_JSON__;
+    const focusFrame = frames[0];
+    const focusLatitude = Number(focusFrame.cell.center_latitude || 0);
+    const focusLongitude = Number(focusFrame.cell.center_longitude || 0);
+    const planetRadiusM = Number(focusFrame.planet?.mean_radius_m || 6371008.8);
+
+    if (cesiumIonToken) {
+      Cesium.Ion.defaultAccessToken = cesiumIonToken;
+    }
+
+    bootCesium();
+
+    async function bootCesium() {
+      const viewer = new Cesium.Viewer("cesiumContainer", {
+        animation: false,
+        timeline: false,
+        geocoder: false,
+        homeButton: true,
+        sceneModePicker: false,
+        baseLayerPicker: false,
+        navigationHelpButton: false,
+        infoBox: false,
+        selectionIndicator: false,
+        terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+        imageryProvider: new Cesium.UrlTemplateImageryProvider({
+          url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          maximumLevel: 19,
+          credit: "Esri, Maxar, Earthstar Geographics",
+        }),
+      });
+
+      viewer.scene.globe.depthTestAgainstTerrain = true;
+      viewer.scene.globe.enableLighting = true;
+
+      if (cesiumIonToken && Cesium.CesiumTerrainProvider?.fromIonAssetId) {
+        try {
+          viewer.terrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(1, {
+            requestWaterMask: true,
+            requestVertexNormals: true,
+          });
+          document.getElementById("terrainValue").textContent = "Cesium World Terrain";
+        } catch (error) {
+          console.warn("Cesium terrain unavailable; using ellipsoid terrain.", error);
+        }
+      }
+
+      if (googleMapsApiKey) {
+        try {
+          const photorealisticTiles = await Cesium.Cesium3DTileset.fromUrl(
+            `https://tile.googleapis.com/v1/3dtiles/root.json?key=${googleMapsApiKey}`,
+            { showCreditsOnScreen: true }
+          );
+          viewer.scene.primitives.add(photorealisticTiles);
+          document.getElementById("tilesValue").textContent = "Google Photorealistic 3D Tiles";
+        } catch (error) {
+          console.warn("Google Photorealistic 3D Tiles unavailable; using fallback globe.", error);
+          await addFallbackBuildings(viewer);
+        }
+      } else {
+        await addFallbackBuildings(viewer);
+      }
+
+      addGenesisAnchor(viewer);
+      updateLegend();
+      flyOrbit(viewer);
+
+      document.getElementById("focusButton").addEventListener("click", () => flyFocus(viewer));
+      document.getElementById("orbitButton").addEventListener("click", () => flyOrbit(viewer));
+    }
+
+    async function addFallbackBuildings(viewer) {
+      if (!cesiumIonToken || !Cesium.createOsmBuildingsAsync) {
+        document.getElementById("tilesValue").textContent = "Satellite + open fallback";
+        return;
+      }
+      try {
+        const osmBuildings = await Cesium.createOsmBuildingsAsync();
+        viewer.scene.primitives.add(osmBuildings);
+        document.getElementById("tilesValue").textContent = "Cesium OSM Buildings";
+      } catch (error) {
+        console.warn("Cesium OSM Buildings unavailable; using imagery-only fallback.", error);
+        document.getElementById("tilesValue").textContent = "Satellite + open fallback";
+      }
+    }
+
+    function addGenesisAnchor(viewer) {
+      const firstPhysicsFrame = physicsFrames?.frames?.[0];
+      const waterCount = firstPhysicsFrame?.water_particles?.length || 0;
+      const soilCount = firstPhysicsFrame?.soil_particles?.length || 0;
+      viewer.entities.add({
+        name: "Genesis physics shard anchor",
+        position: Cesium.Cartesian3.fromDegrees(focusLongitude, focusLatitude, 35),
+        point: {
+          pixelSize: 11,
+          color: Cesium.Color.CYAN.withAlpha(0.88),
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: {
+          text: `Genesis physics shard anchor\n${waterCount} water samples | ${soilCount} soil samples`,
+          font: "14px sans-serif",
+          fillColor: Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 3,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cesium.Cartesian2(0, -38),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+    }
+
+    function flyFocus(viewer) {
+      document.getElementById("modeValue").textContent = "Local 3D Tiles";
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(focusLongitude, focusLatitude, 5200),
+        orientation: {
+          heading: Cesium.Math.toRadians(18),
+          pitch: Cesium.Math.toRadians(-34),
+          roll: 0,
+        },
+        duration: 2.6,
+      });
+    }
+
+    function flyOrbit(viewer) {
+      document.getElementById("modeValue").textContent = "3D globe";
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(focusLongitude, focusLatitude, 16000000),
+        orientation: {
+          heading: 0,
+          pitch: Cesium.Math.toRadians(-90),
+          roll: 0,
+        },
+        duration: 2.2,
+      });
+    }
+
+    function updateLegend() {
+      const firstPhysicsFrame = physicsFrames?.frames?.[0];
+      const physicsRow = firstPhysicsFrame
+        ? `<div class="body-row"><strong>Genesis physics shard anchor</strong>${physicsFrames.frames.length} frames are available for local water/soil effects after the renderer resolves real terrain and 3D Tiles.</div>`
+        : "";
+      const terrainRow = terrainTile?.source
+        ? `<div class="body-row"><strong>Validation terrain</strong>${terrainTile.source.name} remains embedded as source provenance for elevation/bathymetry checks.</div>`
+        : "";
+      document.getElementById("legend").innerHTML =
+        `<div class="body-row"><strong>High-fidelity quality target</strong>This path combines streamed geospatial data, 3D reconstruction, semantic layers, and local simulation overlays.</div>` +
+        `<div class="body-row"><strong>Photorealistic 3D Tiles path</strong>When a Google Maps API key is present, the viewer attempts Google Photorealistic 3D Tiles. With Cesium ion, it can add Cesium World Terrain and OSM Buildings; otherwise it uses open satellite fallback imagery.</div>` +
+        `<div class="body-row"><strong>WGS84 physical frame</strong>Earth radius is kept at ${formatMeters(planetRadiusM)} in simulation metadata; local Genesis effects must be anchored to longitude, latitude, and height.</div>` +
+        physicsRow +
+        terrainRow +
+        surfaceSamples.slice(0, 2).map((sample) =>
+          `<div class="body-row"><strong>${sample.name}</strong>${sample.surface_type} | ${Number(sample.elevation_m).toLocaleString()}m | ${sample.source.name}</div>`
+        ).join("");
+    }
+
+    function formatMeters(value) {
+      return `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 1 })} m`;
     }
   </script>
 </body>
