@@ -95,10 +95,11 @@ This emits `tileset.json`, `tile.glb`, `provenance.json`, and `genesis-terrain-p
 Build the whole-planet ingestion manifest:
 
 ```bash
+python examples/build_source_acquisition_catalog.py --output artifacts/source-acquisition-catalog.json
 python examples/build_whole_planet_ingestion_manifest.py --output artifacts/whole-planet-ingestion-manifest.json
 ```
 
-The manifest defines global ingestion from OSM planet data, Overture GeoParquet, ETOPO terrain, and GEBCO bathymetry. It does not claim the planet has been downloaded locally; it creates the resumable job contract for worker pools and object storage. For a bounded preview tile with real open data, add `--fetch-dem` and optionally `--fetch-osm`:
+The source catalog and ingestion manifest define global acquisition from OSM planet data, Overture GeoParquet, ETOPO terrain, GEBCO bathymetry, land-cover rasters, and global imagery indexes. They do not claim the planet has been downloaded locally; they create the resumable job contract for worker pools and object storage. For a bounded preview tile with real open data, add `--fetch-dem` and optionally `--fetch-osm`:
 
 ```bash
 python examples/build_open_tile.py --fetch-dem --fetch-osm --output artifacts/open-tiles

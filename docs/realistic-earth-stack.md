@@ -74,9 +74,12 @@ Whole-planet ingestion must use bulk datasets and distributed workers, not publi
 - OSM planet PBF or regional extracts for roads, water, parks, coastlines, and land use.
 - Overture Maps GeoParquet for global building and transportation features.
 - ETOPO and GEBCO global grids for terrain and bathymetry.
+- Copernicus/Sentinel global land-cover and imagery indexes for material classes and texture work.
 - H3 shard activation, checkpointing, resumability, and object-storage-ready outputs.
 
 The local machine can run bounded preview tiles. A full global run requires object storage, a worker pool, dataset license review, and checkpointed shard scheduling.
+
+The source acquisition catalog in `examples/build_source_acquisition_catalog.py` is the first global gate. By default it writes metadata and bulk-source URIs only. Full-planet download plans require an explicit `--allow-full-planet-downloads` flag so the repo does not accidentally trigger multi-terabyte local downloads.
 
 ## AI Earth Context
 
