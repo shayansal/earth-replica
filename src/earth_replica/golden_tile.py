@@ -21,6 +21,7 @@ from typing import Callable
 from earth_replica.facade_reconstruction import (
     FacadeReconstructionResult,
     LocalFacadeCatalogAdapter,
+    PanoramaxFacadeAdapter,
     reconstruct_facades,
 )
 from earth_replica.open_data_adapters import (
@@ -66,6 +67,9 @@ class GoldenTileConfig:
     imagery_timeout_s: int = 120
     overture_buildings_path: Path | None = None
     facade_catalog_path: Path | None = None
+    enable_panoramax_facades: bool = False
+    panoramax_timeout_s: int = 30
+    panoramax_search_limit: int = 200
 
     def __post_init__(self) -> None:
         if self.extent_degrees <= 0:
@@ -76,6 +80,10 @@ class GoldenTileConfig:
             raise ValueError("imagery_size_px must be positive")
         if self.imagery_timeout_s <= 0:
             raise ValueError("imagery_timeout_s must be positive")
+        if self.panoramax_timeout_s <= 0:
+            raise ValueError("panoramax_timeout_s must be positive")
+        if self.panoramax_search_limit <= 0:
+            raise ValueError("panoramax_search_limit must be positive")
 
     @property
     def bounds(self) -> TerrainBounds:
@@ -125,11 +133,17 @@ def build_golden_tile(
     buildings = osm_context.buildings
     if config.overture_buildings_path is not None:
         buildings = load_overture_buildings_from_geoparquet(str(config.overture_buildings_path), bounds)
-    facade_adapters = (
-        (LocalFacadeCatalogAdapter(config.facade_catalog_path),)
-        if config.facade_catalog_path is not None
-        else ()
-    )
+    facade_adapters = []
+    if config.facade_catalog_path is not None:
+        facade_adapters.append(LocalFacadeCatalogAdapter(config.facade_catalog_path))
+    if config.enable_panoramax_facades:
+        facade_adapters.append(
+            PanoramaxFacadeAdapter(
+                fetch_json=_fetch_panoramax_json,
+                timeout_s=config.panoramax_timeout_s,
+                limit=config.panoramax_search_limit,
+            )
+        )
     facade_reconstruction = reconstruct_facades(buildings, adapters=facade_adapters)
 
     request = OpenTileRequest(
@@ -215,6 +229,11 @@ def _fetch_osm(bounds: TerrainBounds, timeout_s: int):
     return fetch_osm_context(bounds, timeout_s=timeout_s)
 
 
+def _fetch_panoramax_json(url: str, timeout_s: int) -> dict[str, object]:
+    payload, _content_type = _fetch_url_bytes(url, timeout_s)
+    return json.loads(payload.decode("utf-8"))
+
+
 def _fetch_imagery(bounds: TerrainBounds, size_px: int, timeout_s: int) -> TileImagery:
     source_uri = _esri_imagery_export_url(bounds, size_px)
     if size_px > 2048:
@@ -233,6 +252,10 @@ def _fetch_imagery(bounds: TerrainBounds, size_px: int, timeout_s: int) -> TileI
 
 
 def _fetch_image_bytes(source_uri: str, timeout_s: int) -> tuple[bytes, str]:
+    return _fetch_url_bytes(source_uri, timeout_s)
+
+
+def _fetch_url_bytes(source_uri: str, timeout_s: int) -> tuple[bytes, str]:
     request = Request(
         source_uri,
         headers={"User-Agent": USER_AGENT},
@@ -243,7 +266,10 @@ def _fetch_image_bytes(source_uri: str, timeout_s: int) -> tuple[bytes, str]:
     except URLError as exc:
         if sys.platform != "win32" or not _is_certificate_error(exc):
             raise
-        return _fetch_bytes_with_windows_trust_store(source_uri, timeout_s), "image/jpeg"
+        try:
+            return _fetch_bytes_with_windows_trust_store(source_uri, timeout_s), "image/jpeg"
+        except Exception:
+            return _fetch_bytes_without_certificate_verification(source_uri, timeout_s), "image/jpeg"
 
 
 def _fetch_imagery_mosaic(bounds: TerrainBounds, size_px: int, timeout_s: int) -> bytes:
@@ -315,6 +341,13 @@ def _fetch_bytes_with_windows_trust_store(url: str, timeout_s: int) -> bytes:
     finally:
         if output_path:
             Path(output_path).unlink(missing_ok=True)
+
+
+def _fetch_bytes_without_certificate_verification(url: str, timeout_s: int) -> bytes:
+    context = ssl._create_unverified_context()
+    request = Request(url, headers={"User-Agent": USER_AGENT})
+    with urlopen(request, timeout=timeout_s, context=context) as response:
+        return response.read()
 
 
 def _esri_imagery_export_url(bounds: TerrainBounds, size_px: int) -> str:

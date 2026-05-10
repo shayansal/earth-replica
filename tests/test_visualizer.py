@@ -346,6 +346,7 @@ def test_render_preview_html_can_link_local_open_tileset(tmp_path):
     assert 'const openFacadeReconstructionUri = "open/h3_7_872830828ffffff/facade-reconstruction.json";' in html
     assert "Facade reconstruction" in html
     assert "observed facade candidates" in html
+    assert "fetchJsonWithRetry" in html
     assert "Local open 3D Tiles" in html
     assert "Textured terrain tile" in html
     assert "DirectionalLight" in html

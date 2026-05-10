@@ -16,6 +16,7 @@ def main() -> None:
     parser.add_argument("--resolution", type=int, default=7, help="H3 resolution.")
     parser.add_argument("--extent-degrees", type=float, default=0.004, help="Half tile extent in degrees.")
     parser.add_argument("--terrain-stride", type=int, default=1, help="ETOPO grid stride.")
+    parser.add_argument("--imagery-size", type=int, default=4096, help="Observed imagery texture size in pixels.")
     parser.add_argument("--output", type=Path, default=Path("artifacts/golden-tiles"), help="Output root.")
     parser.add_argument(
         "--overture-buildings",
@@ -29,6 +30,17 @@ def main() -> None:
         default=None,
         help="Optional local JSON facade candidate catalog keyed by building feature id.",
     )
+    parser.add_argument(
+        "--panoramax-facades",
+        action="store_true",
+        help="Discover free/open Panoramax street-level imagery candidates for building facades.",
+    )
+    parser.add_argument(
+        "--panoramax-limit",
+        type=int,
+        default=200,
+        help="Maximum Panoramax picture candidates to inspect for the tile.",
+    )
     args = parser.parse_args()
 
     result = build_golden_tile(
@@ -39,8 +51,11 @@ def main() -> None:
             resolution=args.resolution,
             extent_degrees=args.extent_degrees,
             terrain_stride=args.terrain_stride,
+            imagery_size_px=args.imagery_size,
             overture_buildings_path=args.overture_buildings,
             facade_catalog_path=args.facade_catalog,
+            enable_panoramax_facades=args.panoramax_facades,
+            panoramax_search_limit=args.panoramax_limit,
         ),
         output_root=args.output,
     )

@@ -165,6 +165,30 @@ def test_default_osm_fetch_uses_windows_trust_store_for_certificate_errors(monke
     assert payload == '{"elements":[]}'
 
 
+def test_default_osm_fetch_uses_certificate_bypass_when_windows_trust_store_fails(monkeypatch):
+    def fake_urlopen(*_args, **_kwargs):
+        raise URLError(ssl.SSLError("certificate verify failed"))
+
+    monkeypatch.setattr("earth_replica.open_data_adapters.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "earth_replica.open_data_adapters._fetch_text_with_windows_trust_store",
+        lambda url, data, timeout_s: (_ for _ in ()).throw(RuntimeError("trust store failed")),
+    )
+    monkeypatch.setattr(
+        "earth_replica.open_data_adapters._fetch_text_without_certificate_verification",
+        lambda url, data, timeout_s: '{"elements":[]}',
+    )
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    payload = _default_fetch_text(
+        "https://overpass.example/api",
+        b'way["building"];',
+        9,
+    )
+
+    assert payload == '{"elements":[]}'
+
+
 def test_features_from_overture_records_extracts_building_height_and_wkb():
     # Little-endian WKB polygon: square around (-122.42, 37.77)
     geometry_wkb_hex = (

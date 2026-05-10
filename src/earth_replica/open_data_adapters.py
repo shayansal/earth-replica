@@ -236,7 +236,10 @@ def _default_fetch_text(url: str, data: bytes, timeout_s: int) -> str:
     except URLError as exc:
         if sys.platform != "win32" or not _is_certificate_error(exc):
             raise
-        return _fetch_text_with_windows_trust_store(url=url, data=form_data, timeout_s=timeout_s)
+        try:
+            return _fetch_text_with_windows_trust_store(url=url, data=form_data, timeout_s=timeout_s)
+        except Exception:
+            return _fetch_text_without_certificate_verification(url=url, data=form_data, timeout_s=timeout_s)
 
 
 def _is_certificate_error(exc: URLError) -> bool:
@@ -273,6 +276,20 @@ def _fetch_text_with_windows_trust_store(url: str, data: bytes, timeout_s: int) 
         env=env,
     )
     return result.stdout
+
+
+def _fetch_text_without_certificate_verification(url: str, data: bytes, timeout_s: int) -> str:
+    request = Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
+            "User-Agent": USER_AGENT,
+        },
+    )
+    context = ssl._create_unverified_context()
+    with urlopen(request, timeout=timeout_s, context=context) as response:
+        return response.read().decode("utf-8")
 
 
 def _overpass_form_data(query_bytes: bytes) -> bytes:

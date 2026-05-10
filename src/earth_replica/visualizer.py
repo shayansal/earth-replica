@@ -762,15 +762,28 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
         return null;
       }
       try {
-        const response = await fetch(openFacadeReconstructionUri, { cache: "no-store" });
-        if (!response.ok) {
-          return null;
-        }
-        return await response.json();
+        return await fetchJsonWithRetry(openFacadeReconstructionUri);
       } catch (error) {
         console.warn("Facade reconstruction manifest unavailable.", error);
         return null;
       }
+    }
+
+    async function fetchJsonWithRetry(url, attempts = 3) {
+      let lastError = null;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          const response = await fetch(url, { cache: "no-store" });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          return await response.json();
+        } catch (error) {
+          lastError = error;
+          await new Promise((resolve) => setTimeout(resolve, 180 * (attempt + 1)));
+        }
+      }
+      throw lastError;
     }
 
     async function addPhotorealisticOrFallback(viewer) {

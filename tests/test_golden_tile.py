@@ -82,6 +82,72 @@ def test_local_facade_catalog_assigns_observed_candidates_and_inferred_fallback(
     assert record["source_counts"] == {"Street-level imagery catalog": 1}
 
 
+def test_panoramax_adapter_assigns_open_imagery_candidates_to_nearest_facing_building():
+    from earth_replica.facade_reconstruction import PanoramaxFacadeAdapter, reconstruct_facades
+    from earth_replica.open_tile_pipeline import OpenFeature, ProvenanceRecord
+
+    provenance = ProvenanceRecord(
+        source_id="source:buildings",
+        source_name="OpenStreetMap",
+        domain="buildings",
+        state="observed",
+        license="ODbL",
+        resolution="mapped footprint",
+    )
+    building = OpenFeature(
+        feature_id="building-facing-camera",
+        layer="buildings",
+        geometry=((-1.0004, 48.0003), (-0.9996, 48.0003), (-0.9996, 48.0008), (-1.0004, 48.0008)),
+        height_m=14.0,
+        provenance=provenance,
+    )
+    payload = {
+        "features": [
+            {
+                "id": "pano-facing",
+                "geometry": {"type": "Point", "coordinates": [-1.0, 48.0]},
+                "properties": {
+                    "datetime": "2026-02-03T10:11:12Z",
+                    "view:azimuth": 0.0,
+                },
+                "assets": {
+                    "hd": {"href": "https://api.panoramax.example/api/pictures/pano-facing/hd.jpg"},
+                    "thumb": {"href": "https://api.panoramax.example/api/pictures/pano-facing/thumb.jpg"},
+                },
+            },
+            {
+                "id": "pano-away",
+                "geometry": {"type": "Point", "coordinates": [-1.0, 48.0]},
+                "properties": {
+                    "datetime": "2026-02-03T10:11:13Z",
+                    "view:azimuth": 180.0,
+                },
+                "assets": {
+                    "hd": {"href": "https://api.panoramax.example/api/pictures/pano-away/hd.jpg"},
+                },
+            },
+        ],
+    }
+    calls = []
+
+    def fake_fetch(url: str, timeout_s: int):
+        calls.append((url, timeout_s))
+        return payload
+
+    adapter = PanoramaxFacadeAdapter(fetch_json=fake_fetch, base_url="https://api.panoramax.example/api", timeout_s=17)
+    result = reconstruct_facades((building,), adapters=(adapter,))
+    record = result.to_record()
+
+    assert "bbox=" in calls[0][0]
+    assert calls[0][1] == 17
+    assert record["observed_feature_count"] == 1
+    assert record["assignments"][0]["source_name"] == "Panoramax"
+    assert record["assignments"][0]["source_uri"] == "https://api.panoramax.example/api/search?ids=pano-facing"
+    assert record["assignments"][0]["texture_uri"] == "https://api.panoramax.example/api/pictures/pano-facing/hd.jpg"
+    assert record["assignments"][0]["captured_at"] == "2026-02-03T10:11:12Z"
+    assert record["assignments"][0]["confidence"] > 0.7
+
+
 def test_golden_tile_pipeline_fetches_measured_sources_and_writes_quality_manifest(tmp_path):
     calls = {"terrain": 0, "osm": 0, "imagery": 0}
 
@@ -331,6 +397,93 @@ def test_golden_tile_uses_local_facade_catalog_for_observed_facade_provenance(tm
     assert quality["source_coverage"]["building_facades"]["inferred_feature_count"] == 0
     assert facade_manifest["assignments"][0]["state"] == "observed"
     assert facade_manifest["assignments"][0]["texture_uri"] == "facades/osm-building-facade-test.jpg"
+
+
+def test_golden_tile_can_enable_open_panoramax_facade_discovery(tmp_path, monkeypatch):
+    def fake_fetch_terrain(bounds: TerrainBounds, stride: int, timeout_s: int) -> TerrainTile:
+        return TerrainTile(
+            bounds=bounds,
+            stride=stride,
+            samples=(
+                TerrainSample(bounds.min_latitude, bounds.min_longitude, 1.0),
+                TerrainSample(bounds.min_latitude, bounds.max_longitude, 1.0),
+                TerrainSample(bounds.max_latitude, bounds.min_longitude, 1.0),
+                TerrainSample(bounds.max_latitude, bounds.max_longitude, 1.0),
+            ),
+        )
+
+    def fake_fetch_osm(bounds: TerrainBounds, timeout_s: int):
+        from earth_replica.open_data_adapters import OsmContext
+        from earth_replica.open_tile_pipeline import OpenFeature, ProvenanceRecord
+
+        provenance = ProvenanceRecord(
+            source_id="osm:building:panoramax-test",
+            source_name="OpenStreetMap",
+            domain="buildings",
+            state="observed",
+            license="ODbL",
+            resolution="mapped footprint",
+        )
+        building = OpenFeature(
+            feature_id="osm:building:panoramax-test",
+            layer="buildings",
+            geometry=(
+                (bounds.min_longitude, bounds.min_latitude + 0.0003),
+                (bounds.max_longitude, bounds.min_latitude + 0.0003),
+                (bounds.max_longitude, bounds.max_latitude),
+                (bounds.min_longitude, bounds.max_latitude),
+            ),
+            height_m=18.0,
+            provenance=provenance,
+        )
+        return OsmContext(buildings=(building,), roads=(), water=(), land_cover={"urban": 1.0})
+
+    def fake_fetch_imagery(bounds: TerrainBounds, size_px: int, timeout_s: int) -> TileImagery:
+        return TileImagery(
+            bytes=b"fake-jpeg-bytes",
+            content_type="image/jpeg",
+            source_name="Test orthophoto",
+            source_uri="https://example.test/imagery",
+            license="test imagery license",
+            resolution="4096px test tile",
+        )
+
+    monkeypatch.setattr(
+        golden_tile,
+        "_fetch_panoramax_json",
+        lambda url, timeout_s: {
+            "features": [
+                {
+                    "id": "pano-open",
+                    "geometry": {"type": "Point", "coordinates": [-122.4194, 37.7748]},
+                    "properties": {"view:azimuth": 0.0, "datetime": "2026-02-03T10:11:12Z"},
+                    "assets": {"hd": {"href": "https://api.panoramax.example/api/pictures/pano-open/hd.jpg"}},
+                }
+            ]
+        },
+    )
+
+    result = build_golden_tile(
+        GoldenTileConfig(
+            center_latitude=37.7749,
+            center_longitude=-122.4194,
+            h3_index="872830828ffffff",
+            resolution=7,
+            extent_degrees=0.002,
+            enable_panoramax_facades=True,
+        ),
+        output_root=tmp_path / "tiles",
+        terrain_fetcher=fake_fetch_terrain,
+        osm_fetcher=fake_fetch_osm,
+        imagery_fetcher=fake_fetch_imagery,
+    )
+
+    quality = json.loads(result.quality_manifest_path.read_text(encoding="utf-8"))
+    facade_manifest = json.loads(result.facade_reconstruction_path.read_text(encoding="utf-8"))
+
+    assert quality["source_coverage"]["building_facades"]["state"] == "observed"
+    assert quality["source_coverage"]["building_facades"]["source_counts"] == {"Panoramax": 1}
+    assert facade_manifest["assignments"][0]["source_name"] == "Panoramax"
 
 
 def test_open_tile_glb_uses_distinct_material_primitives_for_physical_layers(tmp_path):
@@ -635,6 +788,31 @@ def test_fetch_imagery_falls_back_to_windows_trust_store_for_certificate_errors(
     assert imagery.bytes == b"fallback-jpeg"
     assert imagery.content_type == "image/jpeg"
     assert "World_Imagery" in imagery.source_uri
+
+
+def test_fetch_imagery_uses_last_resort_certificate_bypass_when_windows_trust_store_fails(monkeypatch):
+    bounds = TerrainBounds(37.77, 37.78, -122.43, -122.41)
+
+    def raise_certificate_error(*_args, **_kwargs):
+        raise URLError(ssl.SSLError("certificate verify failed"))
+
+    monkeypatch.setattr(golden_tile.sys, "platform", "win32")
+    monkeypatch.setattr(golden_tile, "urlopen", raise_certificate_error)
+    monkeypatch.setattr(
+        golden_tile,
+        "_fetch_bytes_with_windows_trust_store",
+        lambda url, timeout_s: (_ for _ in ()).throw(RuntimeError("trust store failed")),
+    )
+    monkeypatch.setattr(
+        golden_tile,
+        "_fetch_bytes_without_certificate_verification",
+        lambda url, timeout_s: b"unverified-fallback-jpeg",
+    )
+
+    imagery = golden_tile._fetch_imagery(bounds, 512, 30)
+
+    assert imagery.bytes == b"unverified-fallback-jpeg"
+    assert imagery.content_type == "image/jpeg"
 
 
 def test_fetch_imagery_builds_large_requests_from_observed_quadrants(monkeypatch):
