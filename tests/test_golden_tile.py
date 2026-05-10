@@ -141,6 +141,10 @@ def test_golden_tile_pipeline_fetches_measured_sources_and_writes_quality_manife
     assert quality["source_coverage"]["imagery"]["state"] == "observed"
     assert quality["source_coverage"]["imagery"]["source_name"] == "Test orthophoto"
     assert quality["source_coverage"]["imagery"]["resolution"] == "4096px test tile"
+    assert quality["source_coverage"]["building_facades"]["state"] == "inferred"
+    assert quality["source_coverage"]["building_facades"]["observed_feature_count"] == 0
+    assert quality["source_coverage"]["building_facades"]["facade_texture_uri"] == "facade-atlas.png"
+    assert quality["source_coverage"]["building_facades"]["adapter_slots"] == ["mapillary", "kartaview", "oblique_imagery"]
     assert quality["photorealism_contract"]["terrain_texture"] == "observed orthophoto atlas"
     assert quality["photorealism_contract"]["building_roofs"] == "observed orthophoto atlas"
     assert quality["photorealism_contract"]["building_facades"] == "procedural inferred facade atlas until facade imagery is available"
@@ -232,7 +236,7 @@ def test_open_tile_glb_uses_distinct_material_primitives_for_physical_layers(tmp
     assert primitive_materials == {0, 1, 2, 3, 4}
     assert material_names >= {
         "measured terrain",
-        "inferred building facades",
+        "inferred low-rise facades",
         "observed roads",
         "observed water",
         "observed building roofs",
@@ -253,6 +257,7 @@ def test_open_tile_glb_uses_distinct_material_primitives_for_physical_layers(tmp
     assert result.metrics["terrain_textured"] == 1
     assert result.metrics["roof_textured"] == 1
     assert result.metrics["facade_textured"] == 1
+    assert result.metrics["facade_style_low_rise"] == 1
 
 
 def test_open_tile_glb_preserves_full_building_footprint_for_roofs_and_facades(tmp_path):
@@ -308,7 +313,7 @@ def test_open_tile_glb_preserves_full_building_footprint_for_roofs_and_facades(t
     gltf = _read_glb_json(result.glb_path.read_bytes())
     primitives = gltf["meshes"][0]["primitives"]
     roof = next(primitive for primitive in primitives if primitive["material"] == 4)
-    facade = next(primitive for primitive in primitives if primitive["material"] == 1)
+    facade = next(primitive for primitive in primitives if primitive["material"] in {1, 5, 6})
 
     assert gltf["accessors"][roof["indices"]]["count"] == 15
     assert gltf["accessors"][facade["indices"]]["count"] == 30
@@ -376,6 +381,72 @@ def test_open_tile_worker_skips_building_extrusions_centered_in_water(tmp_path):
     assert result.metrics["buildings_skipped_in_water"] == 1
 
 
+def test_open_tile_glb_assigns_facade_style_primitives_by_building_height(tmp_path):
+    from earth_replica.open_tile_pipeline import OpenFeature, OpenTileRequest, OpenTileWorker, ProvenanceRecord
+
+    request = OpenTileRequest(
+        h3_index="872830828ffffff",
+        resolution=7,
+        center_latitude=37.7749,
+        center_longitude=-122.4194,
+        bounds=TerrainBounds(37.77, 37.78, -122.43, -122.41),
+    )
+    terrain = TerrainTile(
+        bounds=request.bounds,
+        stride=1,
+        samples=(
+            TerrainSample(37.77, -122.43, 1.0),
+            TerrainSample(37.77, -122.41, 3.0),
+            TerrainSample(37.78, -122.43, 4.0),
+            TerrainSample(37.78, -122.41, 8.0),
+        ),
+    )
+    provenance = ProvenanceRecord(
+        source_id="source:facade-styles",
+        source_name="test",
+        domain="buildings",
+        state="observed",
+        license="test",
+        resolution="fixture",
+    )
+
+    def building(feature_id: str, lon: float, height: float) -> OpenFeature:
+        return OpenFeature(
+            feature_id=feature_id,
+            layer="buildings",
+            geometry=((lon, 37.772), (lon + 0.0004, 37.772), (lon + 0.0004, 37.7724), (lon, 37.7724)),
+            height_m=height,
+            provenance=provenance,
+        )
+
+    result = OpenTileWorker(output_root=tmp_path).run(
+        request=request,
+        terrain=terrain,
+        buildings=(
+            building("low-rise", -122.426, 10.0),
+            building("mid-rise", -122.424, 30.0),
+            building("high-rise", -122.422, 85.0),
+        ),
+        terrain_texture_uri="tile-imagery.jpg",
+        facade_texture_uri="facade-atlas.png",
+    )
+
+    gltf = _read_glb_json(result.glb_path.read_bytes())
+    primitive_materials = {primitive["material"] for primitive in gltf["meshes"][0]["primitives"]}
+    material_names = {material["name"] for material in gltf["materials"]}
+
+    assert primitive_materials >= {1, 5, 6}
+    assert material_names >= {
+        "inferred low-rise facades",
+        "inferred mid-rise facades",
+        "inferred high-rise facades",
+    }
+    assert result.metrics["facade_style_low_rise"] == 1
+    assert result.metrics["facade_style_mid_rise"] == 1
+    assert result.metrics["facade_style_high_rise"] == 1
+    assert result.metrics["facade_styles_used"] == 3
+
+
 def test_fetch_imagery_falls_back_to_windows_trust_store_for_certificate_errors(monkeypatch):
     bounds = TerrainBounds(37.77, 37.78, -122.43, -122.41)
 
@@ -430,6 +501,16 @@ def test_fetch_imagery_builds_large_requests_from_observed_quadrants(monkeypatch
     assert result.getpixel((3, 0))[1] > 140
     assert result.getpixel((0, 3))[2] > 170
     assert result.getpixel((3, 3))[0] > 180
+
+
+def test_facade_atlas_contains_distinct_style_bands():
+    from PIL import Image
+
+    image = Image.open(BytesIO(golden_tile._build_facade_atlas_png())).convert("RGB")
+
+    assert image.size == (768, 256)
+    assert image.getpixel((40, 40)) != image.getpixel((300, 40))
+    assert image.getpixel((300, 40)) != image.getpixel((560, 40))
 
 
 def _read_glb_json(glb: bytes) -> dict:

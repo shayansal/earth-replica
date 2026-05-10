@@ -281,6 +281,15 @@ def _build_provenance_record(
             confidence=0.55,
         ),
         ProvenanceRecord(
+            source_id="facade:procedural-atlas",
+            source_name="Earth Replica procedural facade atlas",
+            domain="building_facades",
+            state="inferred",
+            license="MIT",
+            resolution="per-tile style atlas",
+            confidence=0.35,
+        ),
+        ProvenanceRecord(
             source_id="genesis:terrain-patch",
             source_name="Genesis local shard patch",
             domain="water_soil_physics",
@@ -440,9 +449,13 @@ def _build_glb(
     metrics["material_primitives"] = sum(1 for indices in builder.primitive_indices.values() if indices)
     metrics["terrain_textured"] = 1 if terrain_texture_uri else 0
     metrics["roof_textured"] = 1 if terrain_texture_uri and builder.primitive_indices.get(4) else 0
-    metrics["facade_textured"] = 1 if facade_texture_uri and builder.primitive_indices.get(1) else 0
+    has_facades = any(builder.primitive_indices.get(index) for index in (1, 5, 6))
+    metrics["facade_textured"] = 1 if facade_texture_uri and has_facades else 0
     metrics["building_roof_triangles"] = builder.building_roof_triangles
     metrics["building_wall_quads"] = builder.building_wall_quads
+    for style, count in builder.facade_style_counts.items():
+        metrics[f"facade_style_{style}"] = count
+    metrics["facade_styles_used"] = sum(1 for count in builder.facade_style_counts.values() if count)
     return builder.to_glb(terrain_texture_uri=terrain_texture_uri, facade_texture_uri=facade_texture_uri)
 
 
@@ -458,10 +471,17 @@ class _MeshBuilder:
             2: [],
             3: [],
             4: [],
+            5: [],
+            6: [],
         }
         self.terrain_vertices = 0
         self.building_roof_triangles = 0
         self.building_wall_quads = 0
+        self.facade_style_counts = {
+            "low_rise": 0,
+            "mid_rise": 0,
+            "high_rise": 0,
+        }
 
     def add_terrain(self, terrain: TerrainTile) -> None:
         latitudes = terrain.latitudes
@@ -497,6 +517,10 @@ class _MeshBuilder:
             return
         base = [self._local(lon, lat, 0.1) for lon, lat in footprint]
         top = [(x, y, z + max(feature.height_m, 3.0)) for x, y, z in base]
+        facade_style = _facade_style(feature.height_m)
+        facade_material_index = _facade_material_index(facade_style)
+        facade_u0, facade_u1 = _facade_style_u_range(facade_style)
+        self.facade_style_counts[facade_style] += 1
         roof_center = _centroid3(top)
         roof_center_uv = _terrain_uv(
             self.request.bounds,
@@ -527,7 +551,12 @@ class _MeshBuilder:
                 base[next_index],
                 top[next_index],
                 top[index],
-            ], material_index=1)
+            ], material_index=facade_material_index, texcoords=[
+                (facade_u0, 1.0),
+                (facade_u1, 1.0),
+                (facade_u1, 0.0),
+                (facade_u0, 0.0),
+            ])
             self.building_wall_quads += 1
 
     def add_polyline_strip(self, feature: OpenFeature, height_m: float) -> None:
@@ -739,6 +768,30 @@ def _terrain_uv(bounds: TerrainBounds, longitude: float, latitude: float) -> tup
     return (max(0.0, min(1.0, u)), max(0.0, min(1.0, v)))
 
 
+def _facade_style(height_m: float) -> str:
+    if height_m <= 18.0:
+        return "low_rise"
+    if height_m <= 60.0:
+        return "mid_rise"
+    return "high_rise"
+
+
+def _facade_material_index(style: str) -> int:
+    return {
+        "low_rise": 1,
+        "mid_rise": 5,
+        "high_rise": 6,
+    }[style]
+
+
+def _facade_style_u_range(style: str) -> tuple[float, float]:
+    return {
+        "low_rise": (0.0, 1.0 / 3.0),
+        "mid_rise": (1.0 / 3.0, 2.0 / 3.0),
+        "high_rise": (2.0 / 3.0, 1.0),
+    }[style]
+
+
 def _open_polygon_ring(points: tuple[tuple[float, float], ...]) -> tuple[tuple[float, float], ...]:
     ring = list(points)
     if len(ring) > 1 and ring[0] == ring[-1]:
@@ -793,6 +846,13 @@ def _gltf_materials(
             "roughnessFactor": 0.88,
             "metallicFactor": 0.0,
         }
+    low_facade_pbr = dict(facade_pbr)
+    mid_facade_pbr = dict(facade_pbr)
+    high_facade_pbr = dict(facade_pbr)
+    if facade_texture_index is not None:
+        low_facade_pbr["baseColorFactor"] = [1.0, 0.98, 0.9, 1.0]
+        mid_facade_pbr["baseColorFactor"] = [0.88, 0.94, 1.0, 1.0]
+        high_facade_pbr["baseColorFactor"] = [0.82, 0.92, 1.0, 1.0]
     return [
         {
             "name": "measured terrain",
@@ -800,8 +860,8 @@ def _gltf_materials(
             **({"extensions": {"KHR_materials_unlit": {}}} if terrain_texture_index is not None else {}),
         },
         {
-            "name": "inferred building facades",
-            "pbrMetallicRoughness": facade_pbr,
+            "name": "inferred low-rise facades",
+            "pbrMetallicRoughness": low_facade_pbr,
             "doubleSided": True,
         },
         {
@@ -825,6 +885,16 @@ def _gltf_materials(
             "name": "observed building roofs",
             "pbrMetallicRoughness": terrain_pbr,
             **({"extensions": {"KHR_materials_unlit": {}}} if terrain_texture_index is not None else {}),
+        },
+        {
+            "name": "inferred mid-rise facades",
+            "pbrMetallicRoughness": mid_facade_pbr,
+            "doubleSided": True,
+        },
+        {
+            "name": "inferred high-rise facades",
+            "pbrMetallicRoughness": high_facade_pbr,
+            "doubleSided": True,
         },
     ]
 

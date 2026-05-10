@@ -316,23 +316,44 @@ def _esri_imagery_export_url(bounds: TerrainBounds, size_px: int) -> str:
     return f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?{query}"
 
 
-def _build_facade_atlas_png(width: int = 256, height: int = 256) -> bytes:
+def _build_facade_atlas_png(width: int = 768, height: int = 256) -> bytes:
     rows = []
+    slot_width = width // 3
     for y in range(height):
         row = bytearray([0])
         for x in range(width):
-            panel = (x // 32) % 4
-            floor = (y // 28) % 6
-            mortar = x % 32 in {0, 31} or y % 28 in {0, 27}
-            window = 7 <= x % 32 <= 22 and 7 <= y % 28 <= 19
-            if mortar:
-                color = (116, 121, 118)
-            elif window:
-                shade = 50 + panel * 9 + floor * 3
-                color = (shade, shade + 10, shade + 18)
+            style = min(2, x // slot_width)
+            local_x = x - style * slot_width
+            if style == 0:
+                panel = (local_x // 32) % 4
+                floor = (y // 28) % 6
+                mortar = local_x % 32 in {0, 31} or y % 28 in {0, 27}
+                window = 7 <= local_x % 32 <= 22 and 7 <= y % 28 <= 19
+                if mortar:
+                    color = (126, 118, 106)
+                elif window:
+                    color = (66 + floor * 2, 76 + floor * 2, 86 + panel * 4)
+                else:
+                    base = 172 + panel * 5 - floor
+                    color = (base, base - 8, base - 18)
+            elif style == 1:
+                mullion = local_x % 24 in {0, 1, 23} or y % 22 in {0, 21}
+                glass = 5 <= local_x % 24 <= 19 and 5 <= y % 22 <= 17
+                if mullion:
+                    color = (130, 137, 140)
+                elif glass:
+                    shimmer = ((local_x + y) % 17) * 2
+                    color = (72 + shimmer, 96 + shimmer, 118 + shimmer)
+                else:
+                    color = (168, 174, 172)
             else:
-                base = 158 + panel * 8 - floor * 2
-                color = (base, base + 2, base - 3)
+                stripe = local_x % 18 in {0, 1, 17}
+                band = y % 18 in {0, 17}
+                reflection = int(28 * (local_x / max(slot_width - 1, 1)))
+                if stripe or band:
+                    color = (112, 124, 132)
+                else:
+                    color = (58 + reflection, 86 + reflection, 106 + reflection)
             row.extend(color)
         rows.append(bytes(row))
     raw = b"".join(rows)
@@ -390,6 +411,16 @@ def _quality_manifest(
                 "texture_uri": tile_result.terrain_texture_path.name
                 if tile_result.terrain_texture_path is not None
                 else None,
+            },
+            "building_facades": {
+                "state": "inferred",
+                "source_name": "Earth Replica procedural facade atlas",
+                "facade_texture_uri": tile_result.facade_texture_path.name
+                if tile_result.facade_texture_path is not None
+                else None,
+                "observed_feature_count": 0,
+                "inferred_feature_count": tile_result.metrics.get("building_features", 0),
+                "adapter_slots": ["mapillary", "kartaview", "oblique_imagery"],
             },
             "land_cover": {
                 "state": "inferred",
