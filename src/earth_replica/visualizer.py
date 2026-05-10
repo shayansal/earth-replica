@@ -9,6 +9,7 @@ from typing import Any
 
 from earth_replica.semantic_layers import semantic_surface_manifest
 from earth_replica.surface import known_surface_records
+from earth_replica.water_rendering import water_render_manifest
 
 
 def load_preview_frames(frames_path: Path) -> list[dict[str, Any]]:
@@ -42,6 +43,10 @@ def render_preview_html(
         "</",
         "<\\/",
     )
+    water_render_json = json.dumps(water_render_manifest(), separators=(",", ":")).replace(
+        "</",
+        "<\\/",
+    )
     terrain_json = "null"
     if terrain_path is not None:
         terrain_json = terrain_path.read_text(encoding="utf-8").replace("</", "<\\/")
@@ -58,6 +63,9 @@ def render_preview_html(
         ).replace(
             "__SEMANTIC_LAYER_JSON__",
             semantic_layer_json,
+        ).replace(
+            "__WATER_RENDER_JSON__",
+            water_render_json,
         )
     if renderer == "maplibre":
         html = html.replace(
@@ -253,6 +261,9 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
     .maplibregl-ctrl-bottom-right {
       bottom: 78px;
     }
+    #localWaterCanvas {
+      display: none;
+    }
     @media (max-width: 760px) {
       .hud {
         flex-direction: column;
@@ -275,6 +286,7 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
 </head>
 <body>
   <div id="map" aria-label="Earth Replica MapLibre globe preview"></div>
+  <canvas id="localWaterCanvas" width="512" height="512" aria-hidden="true"></canvas>
   <section class="hud">
     <div class="title-block">
       <h1>Earth Replica Preview</h1>
@@ -284,6 +296,7 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
       <div class="stat"><span>Renderer</span><strong>MapLibre GL JS</strong></div>
       <div class="stat"><span>Projection</span><strong id="projectionValue">Globe</strong></div>
       <div class="stat"><span>Surface</span><strong id="surfaceStatus">Satellite + DEM</strong></div>
+      <div class="stat"><span>Water</span><strong id="waterStatus">Motion ready</strong></div>
       <div class="stat"><span>Buildings</span><strong id="buildingStatus">Global shells</strong></div>
       <div class="stat"><span>Zoom</span><strong id="zoomValue">-</strong></div>
       <div class="stat"><span>Mode</span><strong id="modeValue">Whole globe</strong></div>
@@ -299,12 +312,14 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
   <script id="frames-data" type="application/json">__FRAMES_JSON__</script>
   <script id="surface-samples-data" type="application/json">__SURFACE_SAMPLES_JSON__</script>
   <script id="semantic-layer-data" type="application/json">__SEMANTIC_LAYER_JSON__</script>
+  <script id="water-render-data" type="application/json">__WATER_RENDER_JSON__</script>
   <script id="terrain-tile-data" type="application/json">__TERRAIN_TILE_JSON__</script>
   <script id="physics-frames-data" type="application/json">__PHYSICS_FRAMES_JSON__</script>
   <script>
     const frames = JSON.parse(document.getElementById("frames-data").textContent);
     const surfaceSamples = JSON.parse(document.getElementById("surface-samples-data").textContent);
     const semanticLayerManifest = JSON.parse(document.getElementById("semantic-layer-data").textContent);
+    const waterRenderManifest = JSON.parse(document.getElementById("water-render-data").textContent);
     const terrainTile = JSON.parse(document.getElementById("terrain-tile-data").textContent);
     const physicsFrames = JSON.parse(document.getElementById("physics-frames-data").textContent);
     const maptilerApiKey = __MAPTILER_API_KEY_JSON__;
@@ -316,6 +331,15 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
     ];
     const earthCenter = [0, 18];
     const hasMapTiler = Boolean(maptilerApiKey);
+    const terrainExaggeration = 1.75;
+    const hasLocalWaterFrames = Boolean(physicsFrames?.frames?.[0]?.water_particles?.length);
+    const waterCanvas = document.getElementById("localWaterCanvas");
+    const waterCanvasContext = waterCanvas.getContext("2d");
+    const waterPatternCanvas = document.createElement("canvas");
+    waterPatternCanvas.width = 128;
+    waterPatternCanvas.height = 128;
+    const waterPatternContext = waterPatternCanvas.getContext("2d");
+    let waterPatternReady = false;
     const satelliteSource = {
       type: "raster",
       tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
@@ -342,6 +366,12 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
     const styleSources = {
       satellite: satelliteSource,
       terrainSource,
+      localWaterShader: {
+        type: "canvas",
+        canvas: "localWaterCanvas",
+        coordinates: makeLocalWaterPatchCoordinates(localCenter, 0.035),
+        animate: true,
+      },
       physicsContext: {
         type: "geojson",
         data: makePhysicsContextFeature(localCenter, 0.02),
@@ -353,6 +383,17 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
     }
     const styleLayers = [
       { id: "satellite", type: "raster", source: "satellite" },
+      {
+        id: "terrain-relief-hillshade",
+        type: "hillshade",
+        source: "terrainSource",
+        paint: {
+          "hillshade-exaggeration": 0.36,
+          "hillshade-shadow-color": "rgba(18, 30, 38, 0.62)",
+          "hillshade-highlight-color": "rgba(255, 250, 230, 0.38)",
+          "hillshade-accent-color": "rgba(90, 142, 146, 0.18)",
+        },
+      },
       {
         id: "physics-context-fill",
         type: "fill",
@@ -374,6 +415,23 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
       styleLayers.push(...semanticMaterialLayers());
       styleLayers.push(globalBuildingShellLayer());
     }
+    styleLayers.push({
+      id: "local-water-wave-shader",
+      type: "raster",
+      source: "localWaterShader",
+      minzoom: waterRenderManifest.local_physics.activation_zoom,
+      paint: {
+        "raster-opacity": hasLocalWaterFrames
+          ? [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              waterRenderManifest.local_physics.activation_zoom, 0.08,
+              13, 0.34,
+            ]
+          : 0,
+      },
+    });
 
     const map = new maplibregl.Map({
       container: "map",
@@ -388,19 +446,22 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
         version: 8,
         sources: styleSources,
         layers: styleLayers,
-        terrain: { source: "terrainSource", exaggeration: 1.15 },
+        terrain: { source: "terrainSource", exaggeration: terrainExaggeration },
       },
     });
 
     map.on("style.load", () => {
       map.setProjection({ type: "globe" });
+      map.setTerrain({ source: "terrainSource", exaggeration: terrainExaggeration });
     });
 
     map.on("load", () => {
       map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
       map.addControl(new maplibregl.FullscreenControl(), "top-right");
       map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
-      map.addControl(new maplibregl.TerrainControl({ source: "terrainSource", exaggeration: 1.15 }), "top-right");
+      map.addControl(new maplibregl.TerrainControl({ source: "terrainSource", exaggeration: terrainExaggeration }), "top-right");
+      installAnimatedWaterLayers();
+      animateWaterLayers();
       updateHud();
       updateLegend();
     });
@@ -441,8 +502,11 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
         ? "Genesis surface-ready"
         : "No shard loaded";
       document.getElementById("surfaceStatus").textContent = hasMapTiler
-        ? "Satellite + MapTiler DEM"
-        : "Satellite + demo DEM";
+        ? `Satellite + MapTiler DEM ${terrainExaggeration}x`
+        : `Satellite + demo DEM ${terrainExaggeration}x`;
+      document.getElementById("waterStatus").textContent = hasLocalWaterFrames
+        ? "Rendered + simulated local"
+        : "Rendered global motion";
       document.getElementById("buildingStatus").textContent = hasMapTiler
         ? "Global untextured shells"
         : "Needs vector tile source";
@@ -458,8 +522,10 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
         : "";
       document.getElementById("legend").innerHTML =
         `<div class="body-row"><strong>Whole-globe first</strong>The camera starts centered on Earth, with the local physics context available only when you ask for it.</div>` +
+        `<div class="body-row"><strong>Terrain relief</strong>DEM terrain is active at ${terrainExaggeration}x with a hillshade relief layer so altitude remains readable from the globe view and the local pitched view.</div>` +
         `<div class="body-row"><strong>Global untextured building shells</strong>${hasMapTiler ? "MapTiler/OpenMapTiles vector buildings stream globally as plain fill-extrusions with no facade imagery or satellite texture applied to the walls." : "Add an open vector building tile source to stream global building shells."}</div>` +
         `<div class="body-row"><strong>Semantic material layers</strong>${semanticLayerManifest.layers.length} separate material/provenance layers for water, roads, forest, snow/ice, desert/sand, farmland, urban surface, parks/grass, and wetlands.</div>` +
+        `<div class="body-row"><strong>Animated water</strong>Global water polygons use rendered procedural motion; close-range water switches to ${hasLocalWaterFrames ? "Genesis-backed simulated local water frames" : "a shader-only hook until Genesis frames are loaded"}.</div>` +
         `<div class="body-row"><strong>1:1 physical data model</strong>Earth radius is kept at ${formatMeters(planetRadiusM)} in simulation metadata while MapLibre handles the camera-scaled globe.</div>` +
         `<div class="body-row"><strong>Physical context</strong>Physics is represented as georeferenced surface context, not floating particles. Genesis output is reserved for surface effects such as water, soil wetness, erosion, and deformation.</div>` +
         physicsRow +
@@ -568,6 +634,36 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
       };
     }
 
+    function installAnimatedWaterLayers() {
+      if (!map.getSource("semanticSurface") || map.getLayer("semantic-water-motion")) {
+        return;
+      }
+
+      map.addImage("animated-water-pattern", renderWaterPatternImage(0), { pixelRatio: 2 });
+      waterPatternReady = true;
+      map.addLayer(
+        {
+          id: "semantic-water-motion",
+          type: "fill",
+          source: "semanticSurface",
+          "source-layer": "water",
+          minzoom: 0,
+          paint: {
+            "fill-pattern": "animated-water-pattern",
+            "fill-opacity": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              1, 0.2,
+              6, 0.34,
+              11, 0.5,
+            ],
+          },
+        },
+        map.getLayer("global-building-shells") ? "global-building-shells" : undefined,
+      );
+    }
+
     function globalBuildingShellLayer() {
       return {
         id: "global-building-shells",
@@ -593,6 +689,90 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
           ],
         },
       };
+    }
+
+    function animateWaterLayers(timestamp = 0) {
+      drawLocalWaterCanvas(timestamp);
+
+      if (waterPatternReady && map.hasImage("animated-water-pattern")) {
+        updateWaterPatternImage(timestamp);
+      }
+
+      requestAnimationFrame(animateWaterLayers);
+    }
+
+    function updateWaterPatternImage(timestamp = 0) {
+      map.updateImage("animated-water-pattern", renderWaterPatternImage(timestamp));
+      map.triggerRepaint();
+    }
+
+    function renderWaterPatternImage(timestamp = 0) {
+      const width = waterPatternCanvas.width;
+      const height = waterPatternCanvas.height;
+      const period = Math.max(1, Number(waterRenderManifest.global_motion.shimmer_period_s || 5.5)) * 1000;
+      const phase = (timestamp % period) / period;
+      const drift = phase * 42;
+
+      waterPatternContext.clearRect(0, 0, width, height);
+      waterPatternContext.fillStyle = "rgba(29, 111, 159, 0.24)";
+      waterPatternContext.fillRect(0, 0, width, height);
+
+      waterPatternContext.lineCap = "round";
+      for (let index = -4; index < 13; index += 1) {
+        const y = index * 13 + drift;
+        const alpha = index % 2 === 0 ? 0.24 : 0.13;
+        waterPatternContext.strokeStyle = `rgba(218, 247, 255, ${alpha})`;
+        waterPatternContext.lineWidth = index % 2 === 0 ? 1.6 : 0.9;
+        waterPatternContext.beginPath();
+        waterPatternContext.moveTo(-18, y);
+        waterPatternContext.bezierCurveTo(18, y - 11, 48, y + 11, 84, y);
+        waterPatternContext.bezierCurveTo(110, y - 8, 132, y + 4, 150, y - 6);
+        waterPatternContext.stroke();
+      }
+
+      waterPatternContext.fillStyle = `rgba(180, 235, 255, ${0.08 + Math.sin(phase * Math.PI * 2) * 0.03})`;
+      waterPatternContext.fillRect(0, 0, width, height);
+      return waterPatternContext.getImageData(0, 0, width, height);
+    }
+
+    function drawLocalWaterCanvas(timestamp = 0) {
+      const width = waterCanvas.width;
+      const height = waterCanvas.height;
+      waterCanvasContext.clearRect(0, 0, width, height);
+
+      const gradient = waterCanvasContext.createLinearGradient(0, 0, width, height);
+      gradient.addColorStop(0, "rgba(24, 104, 136, 0.34)");
+      gradient.addColorStop(0.55, "rgba(72, 181, 220, 0.42)");
+      gradient.addColorStop(1, "rgba(8, 47, 68, 0.32)");
+      waterCanvasContext.fillStyle = gradient;
+      waterCanvasContext.fillRect(0, 0, width, height);
+
+      const offset = (timestamp * 0.035) % 44;
+      waterCanvasContext.lineWidth = 1.8;
+      for (let line = -height; line < width + height; line += 34) {
+        const alpha = 0.12 + ((line + height) % 68 === 0 ? 0.12 : 0);
+        waterCanvasContext.strokeStyle = `rgba(232, 250, 255, ${alpha})`;
+        waterCanvasContext.beginPath();
+        waterCanvasContext.moveTo(line + offset, height);
+        waterCanvasContext.bezierCurveTo(
+          line + 110 + offset,
+          height * 0.64,
+          line + 190 + offset,
+          height * 0.36,
+          line + 280 + offset,
+          0,
+        );
+        waterCanvasContext.stroke();
+      }
+    }
+
+    function makeLocalWaterPatchCoordinates(center, radiusDegrees) {
+      return [
+        [center[0] - radiusDegrees, center[1] + radiusDegrees],
+        [center[0] + radiusDegrees, center[1] + radiusDegrees],
+        [center[0] + radiusDegrees, center[1] - radiusDegrees],
+        [center[0] - radiusDegrees, center[1] - radiusDegrees],
+      ];
     }
 
     function makePhysicsContextFeature(center, radiusDegrees) {

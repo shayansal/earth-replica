@@ -95,6 +95,19 @@ def test_render_preview_html_embeds_frames_and_maplibre_globe(tmp_path):
     assert "semantic-urban" in html
     assert "semantic-wetland" in html
     assert "semantic-layer-data" in html
+    assert '<script id="water-render-data" type="application/json">' in html
+    assert "semantic-water-motion" in html
+    assert "animateWaterLayers" in html
+    assert "animated-water-pattern" in html
+    assert "installAnimatedWaterLayers" in html
+    assert "updateWaterPatternImage" in html
+    assert '"fill-pattern": "animated-water-pattern"' in html
+    assert 'map.updateImage("animated-water-pattern"' in html
+    assert "local-water-wave-shader" in html
+    assert "terrain-relief-hillshade" in html
+    assert 'map.setTerrain({ source: "terrainSource", exaggeration: terrainExaggeration })' in html
+    assert "Terrain relief" in html
+    assert "Animated water" in html
     assert "Global untextured building shells" in html
     assert "1:1 physical data model" in html
     assert "mean_radius_m" in html
@@ -157,8 +170,10 @@ def test_render_preview_html_supports_global_terrain_mode(tmp_path):
     assert "terrain-rgb-v2" in html
     assert "World_Imagery" in html
     assert "physics-context-fill" in html
+    assert "terrain-relief-hillshade" in html
     assert "Whole-globe first" in html
     assert "Semantic material layers" in html
+    assert "Animated water" in html
     assert "streamed satellite imagery" in html
     assert "NOAA ETOPO 2022 Global Relief Model" in html
 
