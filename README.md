@@ -66,8 +66,11 @@ Fetch a coarse global NOAA ETOPO 2022 relief grid and embed it in the preview:
 
 ```bash
 python -c "from pathlib import Path; from earth_replica.terrain import TerrainBounds, fetch_etopo_tile; tile=fetch_etopo_tile(TerrainBounds(-90,90,-180,180), stride=360, timeout_s=360); tile.write_json(Path('artifacts/etopo_global.json'))"
+curl -L "https://assets.science.nasa.gov/content/dam/science/esd/eo/images/bmng/bmng-base/july/world.200407.3x5400x2700.jpg" -o artifacts/world.200407.3x5400x2700.jpg
 python examples/preview_simulation.py --steps 120 --output artifacts/preview.jsonl --html artifacts/preview.html --terrain artifacts/etopo_global.json
 ```
+
+The global shell combines the ETOPO relief/bathymetry displacement map with NASA Blue Marble satellite imagery. The browser preview keeps the planet in real WGS84 meters in the data model, then scales the render so a laptop can orbit the whole Earth and switch to a local Genesis water/soil physics bubble when you zoom in.
 
 Fetch a local higher-resolution ETOPO 2022 terrain subset and embed it in the preview:
 

@@ -140,6 +140,9 @@ def test_render_preview_html_supports_global_terrain_mode(tmp_path):
     assert "buildGlobalTerrainMesh" in html
     assert "createGlobalTerrainTextures" in html
     assert "displacementMap" in html
+    assert "satelliteTextureUrl" in html
+    assert "world.200407.3x5400x2700.jpg" in html
+    assert "NASA Blue Marble satellite" in html
     assert "nearestElevation" in html
     assert "enableGlobalTerrainMode" in html
     assert "Global ETOPO relief mesh" in html
@@ -251,6 +254,8 @@ def test_render_preview_html_has_camera_driven_local_physics_bubble(tmp_path):
 
     assert "localPhysicsBubble" in html
     assert "buildLocalPhysicsBubble" in html
+    assert "applyLocalSoilRelief" in html
+    assert "animateLocalPhysicsBubble" in html
     assert "updateRenderModeFromCamera" in html
     assert "setRenderMode(\"local-physics\")" in html
     assert "particleToLocalVector" in html

@@ -290,7 +290,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
   <section class="hud">
     <div class="title-block">
       <h1>Earth Replica Preview</h1>
-      <p class="subtitle">Three.js 4D playback: WGS84 Earth scale with time-indexed local simulation state.</p>
+      <p class="subtitle">Satellite global shell with WGS84/real-meter data and camera-activated Genesis physics tiles.</p>
     </div>
     <div class="stats">
       <div class="stat"><span>Earth Radius</span><strong id="earthRadius">6,371,008.8 m</strong></div>
@@ -346,6 +346,8 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const localVerticalExaggeration = 1;
     const localPhysicsEnterDistance = 8.8;
     const localPhysicsExitDistance = 14;
+    const satelliteTextureUrl = "world.200407.3x5400x2700.jpg";
+    const satelliteTextureCredit = "NASA Blue Marble satellite";
     const renderModeLabels = {
       global: "Global shell",
       regional: "Regional stream",
@@ -354,6 +356,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
     let frameIndex = 0;
     let playing = true;
     let activeRenderMode = "global";
+    let satelliteTextureLoaded = false;
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x05070b);
@@ -448,6 +451,8 @@ _HTML_TEMPLATE = r"""<!doctype html>
     scene.add(physicsGroup);
     const waterParticleMeshes = [];
     const soilParticleMeshes = [];
+    let localWaterMesh = null;
+    let localSoilMesh = null;
 
     slider.max = Math.max(0, frames.length - 1);
     loadLandWaterTexture();
@@ -714,6 +719,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
           metalness: 0,
         })
       );
+      loadSatelliteTexture(terrainMesh.material);
       terrainGroup.add(terrainMesh);
     }
 
@@ -758,6 +764,27 @@ _HTML_TEMPLATE = r"""<!doctype html>
       displacementTexture.wrapS = THREE.RepeatWrapping;
       displacementTexture.needsUpdate = true;
       return { colorTexture, displacementTexture };
+    }
+
+    function loadSatelliteTexture(material) {
+      const loader = new THREE.TextureLoader();
+      loader.load(
+        satelliteTextureUrl,
+        (texture) => {
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.anisotropy = 8;
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.needsUpdate = true;
+          material.map = texture;
+          material.needsUpdate = true;
+          satelliteTextureLoaded = true;
+          surfaceStatus.textContent = `${satelliteTextureCredit} + ETOPO relief`;
+        },
+        undefined,
+        () => {
+          satelliteTextureLoaded = false;
+        }
+      );
     }
 
     function nearestElevation(latitude, longitude) {
@@ -874,7 +901,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
     }
 
     function buildLocalPhysicsBubble() {
-      const soil = new THREE.Mesh(
+      localSoilMesh = new THREE.Mesh(
         new THREE.PlaneGeometry(9, 9, 64, 64),
         new THREE.MeshStandardMaterial({
           color: 0x7d6244,
@@ -882,11 +909,12 @@ _HTML_TEMPLATE = r"""<!doctype html>
           metalness: 0,
         })
       );
-      soil.rotation.x = -Math.PI / 2;
-      soil.position.y = -0.025;
-      localPhysicsBubble.add(soil);
+      applyLocalSoilRelief(localSoilMesh.geometry);
+      localSoilMesh.rotation.x = -Math.PI / 2;
+      localSoilMesh.position.y = -0.025;
+      localPhysicsBubble.add(localSoilMesh);
 
-      const water = new THREE.Mesh(
+      localWaterMesh = new THREE.Mesh(
         new THREE.PlaneGeometry(4.8, 3.2, 48, 32),
         new THREE.MeshPhysicalMaterial({
           color: 0x2f9fd2,
@@ -900,9 +928,9 @@ _HTML_TEMPLATE = r"""<!doctype html>
           side: THREE.DoubleSide,
         })
       );
-      water.rotation.x = -Math.PI / 2;
-      water.position.set(-0.75, 0.035, 0.15);
-      localPhysicsBubble.add(water);
+      localWaterMesh.rotation.x = -Math.PI / 2;
+      localWaterMesh.position.set(-0.75, 0.035, 0.15);
+      localPhysicsBubble.add(localWaterMesh);
 
       const ridge = new THREE.Mesh(
         new THREE.BoxGeometry(2.8, 0.16, 0.32),
@@ -922,6 +950,38 @@ _HTML_TEMPLATE = r"""<!doctype html>
       gridHelper.position.y = 0.001;
       localPhysicsBubble.add(gridHelper);
       localPhysicsBubble.visible = false;
+    }
+
+    function applyLocalSoilRelief(geometry) {
+      const positions = geometry.attributes.position;
+      for (let index = 0; index < positions.count; index += 1) {
+        const x = positions.getX(index);
+        const y = positions.getY(index);
+        const ridge = 0.14 * Math.exp(-(((x - 1.0) ** 2) + ((y + 0.8) ** 2)) / 2.6);
+        const bank = -0.05 * Math.exp(-(((x + 0.8) ** 2) + ((y - 0.2) ** 2)) / 1.9);
+        const ripple = 0.025 * Math.sin(x * 2.1) * Math.cos(y * 1.7);
+        positions.setZ(index, ridge + bank + ripple);
+      }
+      positions.needsUpdate = true;
+      geometry.computeVertexNormals();
+    }
+
+    function animateLocalPhysicsBubble(elapsedS) {
+      if (!localWaterMesh) {
+        return;
+      }
+      const positions = localWaterMesh.geometry.attributes.position;
+      for (let index = 0; index < positions.count; index += 1) {
+        const x = positions.getX(index);
+        const y = positions.getY(index);
+        const waveA = 0.024 * Math.sin((x * 2.3) + (elapsedS * 1.4));
+        const waveB = 0.014 * Math.cos((y * 3.1) - (elapsedS * 1.9));
+        positions.setZ(index, waveA + waveB);
+      }
+      positions.needsUpdate = true;
+      localWaterMesh.geometry.computeVertexNormals();
+      localWaterMesh.position.y = 0.035 + 0.012 * Math.sin(elapsedS * 1.1);
+      localWaterMesh.rotation.z = 0.01 * Math.sin(elapsedS * 0.7);
     }
 
     function buildPhysicsParticles() {
@@ -1306,7 +1366,9 @@ _HTML_TEMPLATE = r"""<!doctype html>
       timeValue.textContent = `${Number(frame.time_s).toFixed(3)}s`;
       bodyCount.textContent = terrainTile ? "hidden" : String(names.length);
       if (terrainTile) {
-        surfaceStatus.textContent = `${terrainTile.source.name}`;
+        surfaceStatus.textContent = satelliteTextureLoaded
+          ? `${satelliteTextureCredit} + ETOPO relief`
+          : `${terrainTile.source.name}`;
       }
       frameLabel.textContent = `Frame ${index + 1} / ${frames.length}`;
       slider.value = String(index);
@@ -1362,6 +1424,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
       }
       controls.update();
       updateRenderModeFromCamera();
+      animateLocalPhysicsBubble(performance.now() / 1000);
       renderer.render(scene, camera);
       window.setTimeout(() => window.requestAnimationFrame(tick), 66);
     }
