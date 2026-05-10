@@ -270,21 +270,22 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
   <section class="hud">
     <div class="title-block">
       <h1>Earth Replica Preview</h1>
-      <p class="subtitle">MapLibre globe with streamed satellite imagery, raster DEM terrain, and Genesis physics metadata attached as surface context.</p>
+      <p class="subtitle">Whole-Earth globe with streamed satellite imagery, DEM terrain, and global untextured building shells.</p>
     </div>
     <div class="stats">
       <div class="stat"><span>Renderer</span><strong>MapLibre GL JS</strong></div>
       <div class="stat"><span>Projection</span><strong id="projectionValue">Globe</strong></div>
       <div class="stat"><span>Surface</span><strong id="surfaceStatus">Satellite + DEM</strong></div>
+      <div class="stat"><span>Buildings</span><strong id="buildingStatus">Global shells</strong></div>
       <div class="stat"><span>Zoom</span><strong id="zoomValue">-</strong></div>
-      <div class="stat"><span>Mode</span><strong id="modeValue">Global terrain</strong></div>
+      <div class="stat"><span>Mode</span><strong id="modeValue">Whole globe</strong></div>
       <div class="stat"><span>Physics</span><strong id="physicsValue">Surface context</strong></div>
     </div>
   </section>
   <section id="legend" class="legend" aria-live="polite"></section>
   <section class="controls">
-    <button id="focusButton" type="button">Focus Physics Area</button>
-    <button id="orbitButton" type="button">Orbit Globe</button>
+    <button id="centerButton" type="button">Center Earth</button>
+    <button id="localButton" type="button">Local Context</button>
   </section>
 
   <script id="frames-data" type="application/json">__FRAMES_JSON__</script>
@@ -299,10 +300,11 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
     const maptilerApiKey = __MAPTILER_API_KEY_JSON__;
     const focusFrame = frames[0];
     const planetRadiusM = Number(focusFrame.planet?.mean_radius_m || 6371008.8);
-    const focusCenter = [
+    const localCenter = [
       Number(focusFrame.cell.center_longitude || 0),
       Number(focusFrame.cell.center_latitude || 0),
     ];
+    const earthCenter = [0, 18];
     const hasMapTiler = Boolean(maptilerApiKey);
     const satelliteSource = {
       type: "raster",
@@ -321,11 +323,73 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
           url: "https://demotiles.maplibre.org/terrain-tiles/tiles.json",
           tileSize: 256,
         };
+    const buildingSource = hasMapTiler
+      ? {
+          type: "vector",
+          url: `https://api.maptiler.com/tiles/v3/tiles.json?key=${maptilerApiKey}`,
+        }
+      : null;
+    const styleSources = {
+      satellite: satelliteSource,
+      terrainSource,
+      physicsContext: {
+        type: "geojson",
+        data: makePhysicsContextFeature(localCenter, 0.02),
+      },
+    };
+    if (buildingSource) {
+      styleSources.globalBuildings = buildingSource;
+    }
+    const styleLayers = [
+      { id: "satellite", type: "raster", source: "satellite" },
+      {
+        id: "physics-context-fill",
+        type: "fill",
+        source: "physicsContext",
+        paint: {
+          "fill-color": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            2, "rgba(85, 214, 190, 0.0)",
+            8, "rgba(85, 214, 190, 0.0)",
+            14, "rgba(85, 214, 190, 0.04)",
+          ],
+          "fill-outline-color": "rgba(85, 214, 190, 0.22)",
+        },
+      },
+    ];
+    if (buildingSource) {
+      styleLayers.push({
+        id: "global-building-shells",
+        type: "fill-extrusion",
+        source: "globalBuildings",
+        "source-layer": "building",
+        minzoom: 12,
+        paint: {
+          "fill-extrusion-color": "#d8d6cc",
+          "fill-extrusion-opacity": 0.64,
+          "fill-extrusion-height": [
+            "coalesce",
+            ["to-number", ["get", "render_height"]],
+            ["to-number", ["get", "height"]],
+            ["*", ["to-number", ["get", "levels"]], 3.2],
+            6,
+          ],
+          "fill-extrusion-base": [
+            "coalesce",
+            ["to-number", ["get", "render_min_height"]],
+            ["to-number", ["get", "min_height"]],
+            0,
+          ],
+        },
+      });
+    }
 
     const map = new maplibregl.Map({
       container: "map",
-      center: focusCenter,
-      zoom: 2.3,
+      center: earthCenter,
+      zoom: 1.25,
       pitch: 0,
       bearing: 0,
       antialias: true,
@@ -333,33 +397,8 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
       renderWorldCopies: false,
       style: {
         version: 8,
-        sources: {
-          satellite: satelliteSource,
-          terrainSource,
-          physicsContext: {
-            type: "geojson",
-            data: makePhysicsContextFeature(focusCenter, 0.02),
-          },
-        },
-        layers: [
-          { id: "satellite", type: "raster", source: "satellite" },
-          {
-            id: "physics-context-fill",
-            type: "fill",
-            source: "physicsContext",
-            paint: {
-              "fill-color": [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                2, "rgba(85, 214, 190, 0.0)",
-                8, "rgba(85, 214, 190, 0.0)",
-                14, "rgba(85, 214, 190, 0.04)",
-              ],
-              "fill-outline-color": "rgba(85, 214, 190, 0.22)",
-            },
-          },
-        ],
+        sources: styleSources,
+        layers: styleLayers,
         terrain: { source: "terrainSource", exaggeration: 1.15 },
       },
     });
@@ -379,10 +418,10 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
 
     map.on("move", updateHud);
 
-    document.getElementById("focusButton").addEventListener("click", () => {
+    document.getElementById("localButton").addEventListener("click", () => {
       map.setProjection({ type: "mercator" });
       map.easeTo({
-        center: focusCenter,
+        center: localCenter,
         zoom: 13,
         pitch: 56,
         bearing: -24,
@@ -391,11 +430,11 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
       });
     });
 
-    document.getElementById("orbitButton").addEventListener("click", () => {
+    document.getElementById("centerButton").addEventListener("click", () => {
       map.setProjection({ type: "globe" });
       map.easeTo({
-        center: focusCenter,
-        zoom: 2.3,
+        center: earthCenter,
+        zoom: 1.25,
         pitch: 0,
         bearing: 0,
         duration: 2200,
@@ -408,13 +447,16 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
       const projectionType = map.getProjection?.()?.type || "globe";
       document.getElementById("zoomValue").textContent = zoom.toFixed(2);
       document.getElementById("projectionValue").textContent = projectionType === "globe" ? "Globe" : "Local tangent";
-      document.getElementById("modeValue").textContent = zoom >= 10 ? "Local terrain" : "Global terrain";
+      document.getElementById("modeValue").textContent = zoom >= 10 ? "Local context" : "Whole globe";
       document.getElementById("physicsValue").textContent = physicsFrames?.frames?.length
         ? "Genesis surface-ready"
         : "No shard loaded";
       document.getElementById("surfaceStatus").textContent = hasMapTiler
         ? "Satellite + MapTiler DEM"
         : "Satellite + demo DEM";
+      document.getElementById("buildingStatus").textContent = hasMapTiler
+        ? "Global untextured shells"
+        : "Needs vector tile source";
     }
 
     function updateLegend() {
@@ -426,8 +468,9 @@ _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
         ? `<div class="body-row"><strong>Reference terrain data</strong>${terrainTile.source.name} remains available for validation/provenance; MapLibre streams terrain tiles for the interactive globe.</div>`
         : "";
       document.getElementById("legend").innerHTML =
+        `<div class="body-row"><strong>Whole-globe first</strong>The camera starts centered on Earth, with the local physics context available only when you ask for it.</div>` +
+        `<div class="body-row"><strong>Global untextured building shells</strong>${hasMapTiler ? "MapTiler/OpenMapTiles vector buildings stream globally as plain fill-extrusions with no facade imagery or satellite texture applied to the walls." : "Add an open vector building tile source to stream global building shells."}</div>` +
         `<div class="body-row"><strong>1:1 physical data model</strong>Earth radius is kept at ${formatMeters(planetRadiusM)} in simulation metadata while MapLibre handles the camera-scaled globe.</div>` +
-        `<div class="body-row"><strong>Real zoom foundation</strong>MapLibre renders a globe projection with streamed satellite raster tiles and raster DEM terrain, following the 3D terrain approach from the MapLibre tutorial pattern.</div>` +
         `<div class="body-row"><strong>Physical context</strong>Physics is represented as georeferenced surface context, not floating particles. Genesis output is reserved for surface effects such as water, soil wetness, erosion, and deformation.</div>` +
         physicsRow +
         terrainRow +
@@ -620,20 +663,20 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
   <section class="hud">
     <div>
       <h1>Earth Replica Cesium Preview</h1>
-      <p class="subtitle">CesiumJS globe path for photorealistic 3D Tiles, WGS84 terrain, and Genesis physics shard anchoring.</p>
+      <p class="subtitle">Whole-Earth preview for global building shells, WGS84 terrain, and optional local Genesis physics shards.</p>
     </div>
     <div class="stats">
       <div class="stat"><span>Renderer</span><strong>CesiumJS</strong></div>
       <div class="stat"><span>Mode</span><strong id="modeValue">3D globe</strong></div>
-      <div class="stat"><span>3D Tiles</span><strong id="tilesValue">Open fallback</strong></div>
+      <div class="stat"><span>Buildings</span><strong id="tilesValue">Global shell layer</strong></div>
       <div class="stat"><span>Terrain</span><strong id="terrainValue">Ellipsoid</strong></div>
       <div class="stat"><span>Physics</span><strong id="physicsValue">Surface anchor</strong></div>
     </div>
   </section>
   <section id="legend" class="legend" aria-live="polite"></section>
   <section class="controls">
-    <button id="focusButton" type="button">Focus Physics Area</button>
-    <button id="orbitButton" type="button">Orbit Globe</button>
+    <button id="centerButton" type="button">Center Earth</button>
+    <button id="localButton" type="button">Local Tile</button>
   </section>
 
   <script id="frames-data" type="application/json">__FRAMES_JSON__</script>
@@ -706,10 +749,6 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
           intensity: 4.2,
         });
       }
-      if (openGenesisPatchUri) {
-        viewer.scene.globe.show = false;
-      }
-
       if (cesiumIonToken && Cesium.CesiumTerrainProvider?.fromIonAssetId) {
         try {
           viewer.terrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(1, {
@@ -722,39 +761,17 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
         }
       }
 
-      let loadedLocalTiles = false;
-      if (openTilesetUri) {
-        try {
-          const localTiles = await Cesium.Cesium3DTileset.fromUrl(openTilesetUri);
-          viewer.scene.primitives.add(localTiles);
-          loadedLocalTiles = true;
-          document.getElementById("tilesValue").textContent = "Local open 3D Tiles";
-          document.getElementById("terrainValue").textContent = "Textured terrain tile";
-        } catch (error) {
-          console.warn("Local open 3D Tiles unavailable; using fallback globe.", error);
-          viewer.scene.globe.show = true;
-          await addPhotorealisticOrFallback(viewer);
-        }
-      } else {
-        await addPhotorealisticOrFallback(viewer);
-      }
+      await addGlobalBuildingShells(viewer);
 
-      if (!loadedLocalTiles) {
-        await addMeasuredTileOverlay(viewer);
-      }
       if (!openGenesisPatchUri) {
         addGenesisAnchor(viewer);
       }
       facadeReconstruction = await loadFacadeReconstruction();
       updateLegend();
-      if (openGenesisPatchUri) {
-        flyFocus(viewer);
-      } else {
-        flyOrbit(viewer);
-      }
+      centerEarth(viewer);
 
-      document.getElementById("focusButton").addEventListener("click", () => flyFocus(viewer));
-      document.getElementById("orbitButton").addEventListener("click", () => flyOrbit(viewer));
+      document.getElementById("centerButton").addEventListener("click", () => centerEarth(viewer));
+      document.getElementById("localButton").addEventListener("click", () => loadLocalTile(viewer));
     }
 
     async function loadFacadeReconstruction() {
@@ -801,6 +818,55 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
         }
       } else {
         await addFallbackBuildings(viewer);
+      }
+    }
+
+    async function addGlobalBuildingShells(viewer) {
+      if (googleMapsApiKey) {
+        try {
+          const photorealisticTiles = await Cesium.Cesium3DTileset.fromUrl(
+            `https://tile.googleapis.com/v1/3dtiles/root.json?key=${googleMapsApiKey}`,
+            { showCreditsOnScreen: true }
+          );
+          photorealisticTiles.style = new Cesium.Cesium3DTileStyle({
+            color: "color('white', 0.46)",
+          });
+          viewer.scene.primitives.add(photorealisticTiles);
+          document.getElementById("tilesValue").textContent = "Global untextured building shells";
+          return;
+        } catch (error) {
+          console.warn("Global photogrammetry shell layer unavailable; trying OSM building shells.", error);
+        }
+      }
+      if (cesiumIonToken && Cesium.createOsmBuildingsAsync) {
+        try {
+          const osmBuildings = await Cesium.createOsmBuildingsAsync();
+          osmBuildings.style = new Cesium.Cesium3DTileStyle({
+            color: "color('white', 0.52)",
+          });
+          viewer.scene.primitives.add(osmBuildings);
+          document.getElementById("tilesValue").textContent = "Global untextured building shells";
+          return;
+        } catch (error) {
+          console.warn("Global OSM building shells unavailable.", error);
+        }
+      }
+      document.getElementById("tilesValue").textContent = "Global shell source needed";
+    }
+
+    async function loadLocalTile(viewer) {
+      if (!openTilesetUri) {
+        return;
+      }
+      try {
+        const localTiles = await Cesium.Cesium3DTileset.fromUrl(openTilesetUri);
+        viewer.scene.primitives.add(localTiles);
+        document.getElementById("modeValue").textContent = "Local tile overlay";
+        document.getElementById("terrainValue").textContent = "Textured terrain tile";
+        await addMeasuredTileOverlay(viewer);
+        flyFocus(viewer);
+      } catch (error) {
+        console.warn("Local open 3D Tiles unavailable.", error);
       }
     }
 
@@ -985,16 +1051,16 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
       viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
     }
 
-    function flyOrbit(viewer) {
-      document.getElementById("modeValue").textContent = "3D globe";
+    function centerEarth(viewer) {
+      document.getElementById("modeValue").textContent = "Whole globe";
       viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(focusLongitude, focusLatitude, 16000000),
+        destination: Cesium.Cartesian3.fromDegrees(0, 18, 23500000),
         orientation: {
           heading: 0,
           pitch: Cesium.Math.toRadians(-90),
           roll: 0,
         },
-        duration: 2.2,
+        duration: 1.5,
       });
     }
 
@@ -1013,8 +1079,9 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
         ? `<div class="body-row"><strong>Facade reconstruction</strong>${Number(facadeReconstruction.observed_feature_count || 0).toLocaleString()} observed facade candidates, ${Number(facadeReconstruction.inferred_feature_count || 0).toLocaleString()} inferred facade fallbacks.</div>`
         : "";
       document.getElementById("legend").innerHTML =
-        `<div class="body-row"><strong>High-fidelity quality target</strong>This path combines streamed geospatial data, 3D reconstruction, semantic layers, and local simulation overlays.</div>` +
-        `<div class="body-row"><strong>Photorealistic 3D Tiles path</strong>When a Google Maps API key is present, the viewer attempts Google Photorealistic 3D Tiles. With Cesium ion, it can add Cesium World Terrain and OSM Buildings; otherwise it uses open satellite fallback imagery.</div>` +
+        `<div class="body-row"><strong>Whole-globe first</strong>The preview starts centered on the whole planet. Local tiles are optional overlays rather than the default camera target.</div>` +
+        `<div class="body-row"><strong>Global untextured building shells</strong>Buildings are requested as a global shell layer with plain styling only. No facade imagery or satellite texture is rendered onto building walls in this view.</div>` +
+        `<div class="body-row"><strong>Open global path</strong>Planet-scale buildings should come from partitioned Overture/OSM 3D Tiles. Until that tile service exists, the browser can use configured global 3D building services as an interchangeable shell source.</div>` +
         `<div class="body-row"><strong>WGS84 physical frame</strong>Earth radius is kept at ${formatMeters(planetRadiusM)} in simulation metadata; local Genesis effects must be anchored to longitude, latitude, and height.</div>` +
         measuredRow +
         facadeRow +

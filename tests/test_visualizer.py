@@ -81,7 +81,11 @@ def test_render_preview_html_embeds_frames_and_maplibre_globe(tmp_path):
     assert "Local tangent" in html
     assert "satelliteSource" in html
     assert "terrainSource" in html
-    assert "Focus Physics Area" in html
+    assert "Center Earth" in html
+    assert "Local Context" in html
+    assert "global-building-shells" in html
+    assert '"source-layer": "building"' in html
+    assert "Global untextured building shells" in html
     assert "1:1 physical data model" in html
     assert "mean_radius_m" in html
     assert "formatMeters(planetRadiusM)" in html
@@ -143,8 +147,8 @@ def test_render_preview_html_supports_global_terrain_mode(tmp_path):
     assert "terrain-rgb-v2" in html
     assert "World_Imagery" in html
     assert "physics-context-fill" in html
-    assert "MapLibre renders a globe projection" in html
-    assert "streamed satellite raster tiles and raster DEM terrain" in html
+    assert "Whole-globe first" in html
+    assert "streamed satellite imagery" in html
     assert "NOAA ETOPO 2022 Global Relief Model" in html
 
 
@@ -250,13 +254,14 @@ def test_render_preview_html_has_natural_zoom_to_georeferenced_physics_context(t
     render_preview_html(frames_path, output_path, physics_path=physics_path)
     html = output_path.read_text(encoding="utf-8")
 
-    assert "Focus Physics Area" in html
+    assert "Center Earth" in html
+    assert "Local Context" in html
     assert "map.easeTo" in html
     assert "zoom: 13" in html
     assert "pitch: 56" in html
     assert "makePhysicsContextFeature" in html
     assert "physicsContext" in html
-    assert 'zoom >= 10 ? "Local terrain" : "Global terrain"' in html
+    assert 'zoom >= 10 ? "Local context" : "Whole globe"' in html
     assert "renderWorldCopies: false" in html
     assert "not floating particles" in html
     assert "localPhysicsBubble" not in html
@@ -297,6 +302,8 @@ def test_render_preview_html_can_emit_cesium_3d_tiles_preview(tmp_path):
     assert "Cesium.Cesium3DTileset.fromUrl" in html
     assert "Google Photorealistic 3D Tiles" in html
     assert "createOsmBuildingsAsync" in html
+    assert "Global untextured building shells" in html
+    assert "centerEarth(viewer)" in html
     assert "Genesis physics shard anchor" in html
     assert "WGS84" in html
     assert "872830828ffffff" in html
@@ -349,19 +356,20 @@ def test_render_preview_html_can_link_local_open_tileset(tmp_path):
     assert "fetchJsonWithRetry" in html
     assert "Local open 3D Tiles" in html
     assert "Textured terrain tile" in html
+    assert "Global untextured building shells" in html
     assert "DirectionalLight" in html
     assert "highDynamicRange = false" in html
     assert "openTilesetUri" in html
     assert "addMeasuredTileOverlay" in html
-    assert "if (!loadedLocalTiles)" in html
+    assert "loadLocalTile(viewer)" in html
     assert "Baked local 3D tile" in html
     assert "imageryRectangleUrl" in html
     assert "ImageMaterialProperty" in html
     assert "productionMapStyle" in html
     assert "localTiles.show = false" not in html
-    assert "viewer.scene.globe.show = false" in html
+    assert "viewer.scene.globe.show = false" not in html
     assert "if (!openGenesisPatchUri) {"
-    assert "flyFocus(viewer)" in html
+    assert "centerEarth(viewer)" in html
     assert "HeadingPitchRange" in html
     assert "lookAtTransform" in html
     assert "water_features" in html
