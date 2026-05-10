@@ -347,6 +347,7 @@ def test_render_preview_html_can_link_local_open_tileset(tmp_path):
     assert "ImageMaterialProperty" in html
     assert "productionMapStyle" in html
     assert "localTiles.show = false" in html
+    assert "viewer.scene.globe.show = false" in html
     assert "if (!openGenesisPatchUri) {"
     assert "flyFocus(viewer)" in html
     assert "HeadingPitchRange" in html
@@ -355,6 +356,7 @@ def test_render_preview_html_can_link_local_open_tileset(tmp_path):
     assert "Color.LIME" not in html
     assert "Color.CYAN.withAlpha(0.48)" not in html
     assert "Color.GOLD" not in html
+    assert "#0d4f73" not in html
     assert "Roads, water, buildings, and the tile bounds" not in html
 
 

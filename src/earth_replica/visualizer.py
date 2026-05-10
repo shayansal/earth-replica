@@ -653,7 +653,7 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
       waterHeightM: 126,
       roadColor: Cesium.Color.fromCssColorString("#262626").withAlpha(0.82),
       roadOutlineColor: Cesium.Color.fromCssColorString("#f0ece2").withAlpha(0.36),
-      waterColor: Cesium.Color.fromCssColorString("#0d4f73").withAlpha(0.42),
+      waterColor: Cesium.Color.fromCssColorString("#2f3436").withAlpha(0.28),
       buildingColor: Cesium.Color.fromCssColorString("#d7d2c7").withAlpha(0.84),
       buildingOutlineColor: Cesium.Color.fromCssColorString("#5d5a54").withAlpha(0.46),
     };
@@ -690,6 +690,9 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
       viewer.scene.globe.depthTestAgainstTerrain = true;
       viewer.scene.globe.enableLighting = true;
       viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#071522");
+      if (openGenesisPatchUri) {
+        viewer.scene.globe.show = false;
+      }
 
       if (cesiumIonToken && Cesium.CesiumTerrainProvider?.fromIonAssetId) {
         try {
