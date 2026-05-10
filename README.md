@@ -92,6 +92,18 @@ python examples/preview_simulation.py --steps 120 --output artifacts/preview.jso
 
 This emits `tileset.json`, `tile.glb`, `provenance.json`, and `genesis-terrain-patch.json`. The first worker uses local fixture geometry while preserving the production contract for Overture/OSM buildings, roads, land cover, terrain, bathymetry, and per-layer provenance.
 
+Build the whole-planet ingestion manifest:
+
+```bash
+python examples/build_whole_planet_ingestion_manifest.py --output artifacts/whole-planet-ingestion-manifest.json
+```
+
+The manifest defines global ingestion from OSM planet data, Overture GeoParquet, ETOPO terrain, and GEBCO bathymetry. It does not claim the planet has been downloaded locally; it creates the resumable job contract for worker pools and object storage. For a bounded preview tile with real open data, add `--fetch-dem` and optionally `--fetch-osm`:
+
+```bash
+python examples/build_open_tile.py --fetch-dem --fetch-osm --output artifacts/open-tiles
+```
+
 Fetch a coarse global NOAA ETOPO 2022 relief grid and embed it in the preview:
 
 ```bash

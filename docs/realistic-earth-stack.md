@@ -67,6 +67,17 @@ Production adapters should replace the fixture features in `examples/build_open_
 - land-cover and material classifiers.
 - optional DSM/point-cloud derived building heights.
 
+## Whole-Planet Ingestion Mode
+
+Whole-planet ingestion must use bulk datasets and distributed workers, not public per-tile APIs. The manifest in `examples/build_whole_planet_ingestion_manifest.py` defines:
+
+- OSM planet PBF or regional extracts for roads, water, parks, coastlines, and land use.
+- Overture Maps GeoParquet for global building and transportation features.
+- ETOPO and GEBCO global grids for terrain and bathymetry.
+- H3 shard activation, checkpointing, resumability, and object-storage-ready outputs.
+
+The local machine can run bounded preview tiles. A full global run requires object storage, a worker pool, dataset license review, and checkpointed shard scheduling.
+
 ## AI Earth Context
 
 Use TerraMind as the semantic Earth-observation model layer. TerraMind should run as a Python service that accepts a geospatial tile request and returns land-cover/material context, such as water, vegetation, soil, snow, rock, urban, flood, burn scars, or crop state.

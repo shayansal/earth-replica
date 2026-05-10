@@ -91,6 +91,10 @@ def test_open_tile_worker_emits_3d_tiles_manifest_and_genesis_patch(tmp_path):
     assert patch["terrain"]["min_elevation_m"] == 3.0
     assert patch["materials"]["land_cover"]["urban"] == 0.72
 
+    assert result.metrics["terrain_vertices"] == 4
+    assert result.metrics["building_features"] == 1
+    assert result.metrics["road_features"] == 1
+
 
 def test_open_tile_request_rejects_out_of_bounds_center():
     try:

@@ -116,6 +116,7 @@ class OpenTileResult:
     glb_path: Path
     provenance_path: Path
     genesis_patch_path: Path
+    metrics: dict[str, int]
 
     def to_record(self) -> dict[str, str]:
         return {
@@ -151,7 +152,8 @@ class OpenTileWorker:
         provenance_path = tile_root / "provenance.json"
         genesis_patch_path = tile_root / "genesis-terrain-patch.json"
 
-        glb_path.write_bytes(_build_glb(request, terrain, buildings, roads, water))
+        mesh_metrics: dict[str, int] = {}
+        glb_path.write_bytes(_build_glb(request, terrain, buildings, roads, water, mesh_metrics))
         tileset_path.write_text(
             json.dumps(_build_tileset_record(request, terrain), indent=2),
             encoding="utf-8",
@@ -177,6 +179,12 @@ class OpenTileWorker:
             glb_path=glb_path,
             provenance_path=provenance_path,
             genesis_patch_path=genesis_patch_path,
+            metrics={
+                **mesh_metrics,
+                "building_features": len(buildings),
+                "road_features": len(roads),
+                "water_features": len(water),
+            },
         )
 
 
@@ -345,6 +353,7 @@ def _build_glb(
     buildings: tuple[OpenFeature, ...],
     roads: tuple[OpenFeature, ...],
     water: tuple[OpenFeature, ...],
+    metrics: dict[str, int],
 ) -> bytes:
     builder = _MeshBuilder(request)
     builder.add_terrain(terrain)
@@ -354,6 +363,9 @@ def _build_glb(
         builder.add_polyline_strip(feature, height_m=0.08)
     for feature in water:
         builder.add_polygon(feature, z_m=0.04)
+    metrics["terrain_vertices"] = builder.terrain_vertices
+    metrics["vertices"] = len(builder.positions)
+    metrics["triangles"] = len(builder.indices) // 3
     return builder.to_glb()
 
 
@@ -363,16 +375,34 @@ class _MeshBuilder:
         self.positions: list[tuple[float, float, float]] = []
         self.normals: list[tuple[float, float, float]] = []
         self.indices: list[int] = []
+        self.terrain_vertices = 0
 
     def add_terrain(self, terrain: TerrainTile) -> None:
-        bounds = terrain.bounds
-        corners = [
-            (bounds.min_longitude, bounds.min_latitude, terrain.min_elevation_m),
-            (bounds.max_longitude, bounds.min_latitude, terrain.min_elevation_m),
-            (bounds.max_longitude, bounds.max_latitude, terrain.max_elevation_m),
-            (bounds.min_longitude, bounds.max_latitude, terrain.max_elevation_m),
-        ]
-        self._add_quad([self._local(lon, lat, z) for lon, lat, z in corners])
+        latitudes = terrain.latitudes
+        longitudes = terrain.longitudes
+        by_coordinate = {
+            (sample.latitude, sample.longitude): sample.elevation_m
+            for sample in terrain.samples
+        }
+        vertex_indices: list[list[int]] = []
+        for latitude in latitudes:
+            row = []
+            for longitude in longitudes:
+                row.append(
+                    self._add_vertex(
+                        self._local(longitude, latitude, by_coordinate[(latitude, longitude)]),
+                        (0.0, 0.0, 1.0),
+                    )
+                )
+            vertex_indices.append(row)
+        for lat_index in range(len(latitudes) - 1):
+            for lon_index in range(len(longitudes) - 1):
+                a = vertex_indices[lat_index][lon_index]
+                b = vertex_indices[lat_index][lon_index + 1]
+                c = vertex_indices[lat_index + 1][lon_index + 1]
+                d = vertex_indices[lat_index + 1][lon_index]
+                self.indices.extend([a, b, c, a, c, d])
+        self.terrain_vertices = len(latitudes) * len(longitudes)
 
     def add_building(self, feature: OpenFeature) -> None:
         if len(feature.geometry) < 3:
@@ -419,11 +449,16 @@ class _MeshBuilder:
         self._add_quad(points)
 
     def _add_quad(self, points: list[tuple[float, float, float]]) -> None:
-        start = len(self.positions)
         normal = _normal(points[0], points[1], points[2])
-        self.positions.extend(points)
-        self.normals.extend([normal] * 4)
+        start = len(self.positions)
+        for point in points:
+            self._add_vertex(point, normal)
         self.indices.extend([start, start + 1, start + 2, start, start + 2, start + 3])
+
+    def _add_vertex(self, point: tuple[float, float, float], normal: tuple[float, float, float]) -> int:
+        self.positions.append(point)
+        self.normals.append(normal)
+        return len(self.positions) - 1
 
     def _local(self, longitude: float, latitude: float, z_m: float) -> tuple[float, float, float]:
         meters_per_degree_lat = 111_320.0
