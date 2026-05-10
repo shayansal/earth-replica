@@ -338,8 +338,15 @@ def test_render_preview_html_can_link_local_open_tileset(tmp_path):
     html = output_path.read_text(encoding="utf-8")
 
     assert 'const openTilesetUri = "open/h3_7_872830828ffffff/tileset.json";' in html
+    assert 'const openGenesisPatchUri = "open/h3_7_872830828ffffff/genesis-terrain-patch.json";' in html
     assert "Local open 3D Tiles" in html
     assert "openTilesetUri" in html
+    assert "addMeasuredTileOverlay" in html
+    assert "Measured tile overlay" in html
+    assert "flyFocus(viewer)" in html
+    assert "HeadingPitchRange" in html
+    assert "lookAtTransform" in html
+    assert "water_features" in html
 
 
 def test_render_preview_html_rejects_unknown_renderer(tmp_path):

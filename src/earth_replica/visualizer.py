@@ -66,6 +66,9 @@ def render_preview_html(
         ).replace(
             "__OPEN_TILESET_URI_JSON__",
             json.dumps(_asset_uri(output_path, open_tileset_path)),
+        ).replace(
+            "__OPEN_GENESIS_PATCH_URI_JSON__",
+            json.dumps(_asset_uri(output_path, _sibling_asset(open_tileset_path, "genesis-terrain-patch.json"))),
         )
     output_path.write_text(html, encoding="utf-8")
     return output_path
@@ -96,6 +99,12 @@ def _asset_uri(output_path: Path, asset_path: Path | None) -> str:
         return asset_path.resolve().relative_to(output_path.resolve().parent).as_posix()
     except ValueError:
         return asset_path.resolve().as_uri()
+
+
+def _sibling_asset(asset_path: Path | None, name: str) -> Path | None:
+    if asset_path is None:
+        return None
+    return asset_path.parent / name
 
 
 _MAPLIBRE_HTML_TEMPLATE = r"""<!doctype html>
@@ -636,6 +645,7 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
     const cesiumIonToken = __CESIUM_ION_TOKEN_JSON__;
     const googleMapsApiKey = __GOOGLE_MAPS_API_KEY_JSON__;
     const openTilesetUri = __OPEN_TILESET_URI_JSON__;
+    const openGenesisPatchUri = __OPEN_GENESIS_PATCH_URI_JSON__;
     const focusFrame = frames[0];
     const focusLatitude = Number(focusFrame.cell.center_latitude || 0);
     const focusLongitude = Number(focusFrame.cell.center_longitude || 0);
@@ -694,9 +704,14 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
         await addPhotorealisticOrFallback(viewer);
       }
 
+      await addMeasuredTileOverlay(viewer);
       addGenesisAnchor(viewer);
       updateLegend();
-      flyOrbit(viewer);
+      if (openGenesisPatchUri) {
+        flyFocus(viewer);
+      } else {
+        flyOrbit(viewer);
+      }
 
       document.getElementById("focusButton").addEventListener("click", () => flyFocus(viewer));
       document.getElementById("orbitButton").addEventListener("click", () => flyOrbit(viewer));
@@ -762,17 +777,121 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
       });
     }
 
+    async function addMeasuredTileOverlay(viewer) {
+      if (!openGenesisPatchUri) {
+        return;
+      }
+      try {
+        const response = await fetch(openGenesisPatchUri);
+        if (!response.ok) {
+          throw new Error(`Genesis patch fetch failed: ${response.status}`);
+        }
+        const patch = await response.json();
+        const bounds = patch.extent?.bounds;
+        if (!bounds) {
+          return;
+        }
+        viewer.entities.add({
+          name: "Measured tile overlay",
+          rectangle: {
+            coordinates: Cesium.Rectangle.fromDegrees(
+              bounds.min_longitude,
+              bounds.min_latitude,
+              bounds.max_longitude,
+              bounds.max_latitude
+            ),
+            material: Cesium.Color.LIME.withAlpha(0.08),
+            outline: true,
+            outlineColor: Cesium.Color.LIME,
+            height: 120,
+          },
+        });
+        addWaterFeatures(viewer, patch.materials?.water_features || []);
+        addRoadFeatures(viewer, patch.obstacles?.roads || []);
+        addBuildingFeatures(viewer, patch.obstacles?.buildings || []);
+        document.getElementById("terrainValue").textContent = "Measured tile";
+      } catch (error) {
+        console.warn("Measured tile overlay unavailable.", error);
+      }
+    }
+
+    function addWaterFeatures(viewer, waterFeatures) {
+      waterFeatures.slice(0, 80).forEach((feature) => {
+        const hierarchy = positionsFromFeature(feature, 44);
+        if (hierarchy.length < 3) {
+          return;
+        }
+        viewer.entities.add({
+          name: feature.feature_id || "observed water",
+          polygon: {
+            hierarchy,
+            material: Cesium.Color.CYAN.withAlpha(0.48),
+            outline: true,
+            outlineColor: Cesium.Color.WHITE.withAlpha(0.75),
+            height: 132,
+          },
+        });
+      });
+    }
+
+    function addRoadFeatures(viewer, roadFeatures) {
+      roadFeatures.slice(0, 180).forEach((feature) => {
+        const positions = positionsFromFeature(feature, 148);
+        if (positions.length < 2) {
+          return;
+        }
+        viewer.entities.add({
+          name: feature.feature_id || "observed road",
+          polyline: {
+            positions,
+            width: Math.max(2, Math.min(7, Number(feature.width_m || 6) / 2)),
+            material: Cesium.Color.GOLD.withAlpha(0.82),
+            clampToGround: false,
+          },
+        });
+      });
+    }
+
+    function addBuildingFeatures(viewer, buildingFeatures) {
+      buildingFeatures.slice(0, 180).forEach((feature) => {
+        const hierarchy = positionsFromFeature(feature, 50);
+        if (hierarchy.length < 3) {
+          return;
+        }
+        const height = 140;
+        const extrudedHeight = height + Math.max(4, Math.min(80, Number(feature.height_m || 9)));
+        viewer.entities.add({
+          name: feature.feature_id || "observed building",
+          polygon: {
+            hierarchy,
+            material: Cesium.Color.LIGHTGRAY.withAlpha(0.72),
+            outline: true,
+            outlineColor: Cesium.Color.BLACK.withAlpha(0.55),
+            height,
+            extrudedHeight,
+          },
+        });
+      });
+    }
+
+    function positionsFromFeature(feature, height) {
+      return (feature.geometry || []).map((point) =>
+        Cesium.Cartesian3.fromDegrees(Number(point[0]), Number(point[1]), height)
+      );
+    }
+
     function flyFocus(viewer) {
       document.getElementById("modeValue").textContent = "Local 3D Tiles";
-      viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(focusLongitude, focusLatitude, 5200),
-        orientation: {
-          heading: Cesium.Math.toRadians(18),
-          pitch: Cesium.Math.toRadians(-34),
-          roll: 0,
-        },
-        duration: 2.6,
-      });
+      const target = Cesium.Cartesian3.fromDegrees(focusLongitude, focusLatitude, 130);
+      viewer.camera.lookAt(
+        target,
+        new Cesium.HeadingPitchRange(
+          Cesium.Math.toRadians(36),
+          Cesium.Math.toRadians(-62),
+          1250
+        )
+      );
+      viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
     }
 
     function flyOrbit(viewer) {
@@ -796,10 +915,14 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
       const terrainRow = terrainTile?.source
         ? `<div class="body-row"><strong>Validation terrain</strong>${terrainTile.source.name} remains embedded as source provenance for elevation/bathymetry checks.</div>`
         : "";
+      const measuredRow = openGenesisPatchUri
+        ? `<div class="body-row"><strong>Measured tile overlay</strong>Roads, water, buildings, and the tile bounds are drawn directly from the generated Genesis terrain patch so the local measured surface is visible before full photoreal texturing.</div>`
+        : "";
       document.getElementById("legend").innerHTML =
         `<div class="body-row"><strong>High-fidelity quality target</strong>This path combines streamed geospatial data, 3D reconstruction, semantic layers, and local simulation overlays.</div>` +
         `<div class="body-row"><strong>Photorealistic 3D Tiles path</strong>When a Google Maps API key is present, the viewer attempts Google Photorealistic 3D Tiles. With Cesium ion, it can add Cesium World Terrain and OSM Buildings; otherwise it uses open satellite fallback imagery.</div>` +
         `<div class="body-row"><strong>WGS84 physical frame</strong>Earth radius is kept at ${formatMeters(planetRadiusM)} in simulation metadata; local Genesis effects must be anchored to longitude, latitude, and height.</div>` +
+        measuredRow +
         physicsRow +
         terrainRow +
         surfaceSamples.slice(0, 2).map((sample) =>
