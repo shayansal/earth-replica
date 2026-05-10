@@ -268,6 +268,10 @@ def test_render_preview_html_has_camera_driven_local_physics_bubble(tmp_path):
     assert "deriveLocalContextFromSatellite" in html
     assert "classifySatelliteContext" in html
     assert "localVegetationGroup" in html
+    assert "positionPhysicalContextOnGlobe" in html
+    assert "makeSurfaceBasis" in html
+    assert "localContextPatchRadius" in html
+    assert "ConeGeometry" not in html
     assert "updateRenderModeFromCamera" in html
     assert "particleToLocalVector" in html
     assert "modeValue.textContent = renderModeLabels[activeRenderMode]" in html

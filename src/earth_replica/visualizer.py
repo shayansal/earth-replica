@@ -348,6 +348,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
     const localPhysicsExitDistance = 14;
     const physicalContextStartDistance = 22;
     const physicalContextFullDistance = 7.2;
+    const localContextPatchRadius = renderEarthRadius * 1.022;
     const satelliteTextureUrl = "world.200407.3x5400x2700.jpg";
     const satelliteTextureCredit = "NASA Blue Marble satellite";
     const renderModeLabels = {
@@ -975,9 +976,6 @@ _HTML_TEMPLATE = r"""<!doctype html>
       const fill = new THREE.HemisphereLight(0xaed8ff, 0x5a4028, 1.2);
       localPhysicsBubble.add(fill);
 
-      const gridHelper = new THREE.GridHelper(9, 18, 0x5b7f8c, 0x283d42);
-      gridHelper.position.y = 0.001;
-      localPhysicsBubble.add(gridHelper);
       localVegetationGroup = new THREE.Group();
       localPhysicsBubble.add(localVegetationGroup);
       deriveLocalContextFromSatellite();
@@ -1095,25 +1093,21 @@ _HTML_TEMPLATE = r"""<!doctype html>
       localVegetationGroup.clear();
       const vegetationCells = localContextGrid
         .filter((cell, index) => cell.type === "vegetation" && index % 2 === 0)
-        .slice(0, 42);
-      const trunkMaterial = new THREE.MeshStandardMaterial({
-        color: 0x5d4429,
-        roughness: 0.92,
-        transparent: true,
-        opacity: physicalContextBlend,
-      });
-      const canopyMaterial = new THREE.MeshStandardMaterial({
+        .slice(0, 80);
+      const vegetationMaterial = new THREE.MeshStandardMaterial({
         color: 0x2f7d42,
-        roughness: 0.86,
+        roughness: 0.9,
         transparent: true,
-        opacity: physicalContextBlend,
+        opacity: physicalContextBlend * 0.72,
       });
       vegetationCells.forEach((cell, index) => {
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.026, 0.22, 6), trunkMaterial.clone());
-        trunk.position.set(cell.x, 0.08, cell.z);
-        const canopy = new THREE.Mesh(new THREE.ConeGeometry(0.13, 0.34, 7), canopyMaterial.clone());
-        canopy.position.set(cell.x + ((index % 3) - 1) * 0.035, 0.33, cell.z);
-        localVegetationGroup.add(trunk, canopy);
+        const patch = new THREE.Mesh(
+          new THREE.SphereGeometry(0.055 + (index % 3) * 0.01, 8, 6),
+          vegetationMaterial.clone()
+        );
+        patch.scale.set(1, 0.22, 1);
+        patch.position.set(cell.x + ((index % 3) - 1) * 0.035, 0.035, cell.z);
+        localVegetationGroup.add(patch);
       });
     }
 
@@ -1371,8 +1365,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
       if (localWaterMesh?.material) {
         localWaterMesh.material.opacity = 0.55 * physicalContextBlend;
       }
-      localPhysicsBubble.scale.setScalar(0.68 + physicalContextBlend * 0.32);
-      localPhysicsBubble.position.y = -0.18 * (1 - physicalContextBlend);
+      positionPhysicalContextOnGlobe();
 
       if (physicalContextBlend >= 0.92) {
         activeRenderMode = "local-physics";
@@ -1390,6 +1383,38 @@ _HTML_TEMPLATE = r"""<!doctype html>
         terrainScale.textContent = "ETOPO visual relief";
         verticalScale.textContent = "global bump map";
       }
+    }
+
+    function positionPhysicalContextOnGlobe() {
+      const frame = frames[frameIndex] || frames[0];
+      const cell = frame?.cell;
+      if (!cell) {
+        return;
+      }
+      const center = latLonToVector(
+        cell.center_latitude,
+        cell.center_longitude,
+        localContextPatchRadius + physicalContextBlend * 0.018
+      );
+      const basis = makeSurfaceBasis(cell.center_latitude, cell.center_longitude);
+      localPhysicsBubble.position.copy(center);
+      localPhysicsBubble.quaternion.setFromRotationMatrix(basis);
+      const patchScale = 0.018 + physicalContextBlend * 0.105;
+      localPhysicsBubble.scale.setScalar(patchScale);
+      controls.target.lerp(center, physicalContextBlend * 0.08);
+    }
+
+    function makeSurfaceBasis(latitude, longitude) {
+      const lat = THREE.MathUtils.degToRad(latitude);
+      const lon = THREE.MathUtils.degToRad(longitude);
+      const up = new THREE.Vector3(
+        Math.cos(lat) * Math.cos(lon),
+        Math.sin(lat),
+        Math.cos(lat) * Math.sin(lon)
+      ).normalize();
+      const east = new THREE.Vector3(-Math.sin(lon), 0, Math.cos(lon)).normalize();
+      const north = new THREE.Vector3().crossVectors(up, east).normalize();
+      return new THREE.Matrix4().makeBasis(east, up, north);
     }
 
     function setGroupOpacity(group, opacity) {
