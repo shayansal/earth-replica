@@ -646,6 +646,17 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
     const googleMapsApiKey = __GOOGLE_MAPS_API_KEY_JSON__;
     const openTilesetUri = __OPEN_TILESET_URI_JSON__;
     const openGenesisPatchUri = __OPEN_GENESIS_PATCH_URI_JSON__;
+    const productionMapStyle = {
+      tileHeightM: 118,
+      roadHeightM: 130,
+      buildingHeightM: 132,
+      waterHeightM: 126,
+      roadColor: Cesium.Color.fromCssColorString("#262626").withAlpha(0.82),
+      roadOutlineColor: Cesium.Color.fromCssColorString("#f0ece2").withAlpha(0.36),
+      waterColor: Cesium.Color.fromCssColorString("#0d4f73").withAlpha(0.42),
+      buildingColor: Cesium.Color.fromCssColorString("#d7d2c7").withAlpha(0.84),
+      buildingOutlineColor: Cesium.Color.fromCssColorString("#5d5a54").withAlpha(0.46),
+    };
     const focusFrame = frames[0];
     const focusLatitude = Number(focusFrame.cell.center_latitude || 0);
     const focusLongitude = Number(focusFrame.cell.center_longitude || 0);
@@ -678,6 +689,7 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
 
       viewer.scene.globe.depthTestAgainstTerrain = true;
       viewer.scene.globe.enableLighting = true;
+      viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#071522");
 
       if (cesiumIonToken && Cesium.CesiumTerrainProvider?.fromIonAssetId) {
         try {
@@ -694,6 +706,9 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
       if (openTilesetUri) {
         try {
           const localTiles = await Cesium.Cesium3DTileset.fromUrl(openTilesetUri);
+          if (openGenesisPatchUri) {
+            localTiles.show = false;
+          }
           viewer.scene.primitives.add(localTiles);
           document.getElementById("tilesValue").textContent = "Local open 3D Tiles";
         } catch (error) {
@@ -705,7 +720,9 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
       }
 
       await addMeasuredTileOverlay(viewer);
-      addGenesisAnchor(viewer);
+      if (!openGenesisPatchUri) {
+        addGenesisAnchor(viewer);
+      }
       updateLegend();
       if (openGenesisPatchUri) {
         flyFocus(viewer);
@@ -792,7 +809,7 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
           return;
         }
         viewer.entities.add({
-          name: "Measured tile overlay",
+          name: "Measured satellite tile surface",
           rectangle: {
             coordinates: Cesium.Rectangle.fromDegrees(
               bounds.min_longitude,
@@ -800,10 +817,12 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
               bounds.max_longitude,
               bounds.max_latitude
             ),
-            material: Cesium.Color.LIME.withAlpha(0.08),
-            outline: true,
-            outlineColor: Cesium.Color.LIME,
-            height: 120,
+            material: new Cesium.ImageMaterialProperty({
+              image: imageryRectangleUrl(bounds),
+              transparent: false,
+            }),
+            outline: false,
+            height: productionMapStyle.tileHeightM,
           },
         });
         addWaterFeatures(viewer, patch.materials?.water_features || []);
@@ -825,10 +844,9 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
           name: feature.feature_id || "observed water",
           polygon: {
             hierarchy,
-            material: Cesium.Color.CYAN.withAlpha(0.48),
-            outline: true,
-            outlineColor: Cesium.Color.WHITE.withAlpha(0.75),
-            height: 132,
+            material: productionMapStyle.waterColor,
+            outline: false,
+            height: productionMapStyle.waterHeightM,
           },
         });
       });
@@ -836,7 +854,7 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
 
     function addRoadFeatures(viewer, roadFeatures) {
       roadFeatures.slice(0, 180).forEach((feature) => {
-        const positions = positionsFromFeature(feature, 148);
+        const positions = positionsFromFeature(feature, productionMapStyle.roadHeightM);
         if (positions.length < 2) {
           return;
         }
@@ -844,8 +862,17 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
           name: feature.feature_id || "observed road",
           polyline: {
             positions,
-            width: Math.max(2, Math.min(7, Number(feature.width_m || 6) / 2)),
-            material: Cesium.Color.GOLD.withAlpha(0.82),
+            width: Math.max(1.5, Math.min(5.5, Number(feature.width_m || 6) / 3)),
+            material: productionMapStyle.roadOutlineColor,
+            clampToGround: false,
+          },
+        });
+        viewer.entities.add({
+          name: `${feature.feature_id || "observed road"} surface`,
+          polyline: {
+            positions,
+            width: Math.max(1, Math.min(3.8, Number(feature.width_m || 6) / 4)),
+            material: productionMapStyle.roadColor,
             clampToGround: false,
           },
         });
@@ -858,15 +885,15 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
         if (hierarchy.length < 3) {
           return;
         }
-        const height = 140;
+        const height = productionMapStyle.buildingHeightM;
         const extrudedHeight = height + Math.max(4, Math.min(80, Number(feature.height_m || 9)));
         viewer.entities.add({
           name: feature.feature_id || "observed building",
           polygon: {
             hierarchy,
-            material: Cesium.Color.LIGHTGRAY.withAlpha(0.72),
+            material: productionMapStyle.buildingColor,
             outline: true,
-            outlineColor: Cesium.Color.BLACK.withAlpha(0.55),
+            outlineColor: productionMapStyle.buildingOutlineColor,
             height,
             extrudedHeight,
           },
@@ -878,6 +905,18 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
       return (feature.geometry || []).map((point) =>
         Cesium.Cartesian3.fromDegrees(Number(point[0]), Number(point[1]), height)
       );
+    }
+
+    function imageryRectangleUrl(bounds) {
+      const bbox = [
+        bounds.min_longitude,
+        bounds.min_latitude,
+        bounds.max_longitude,
+        bounds.max_latitude,
+      ].join(",");
+      return "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export" +
+        `?bbox=${encodeURIComponent(bbox)}` +
+        "&bboxSR=4326&imageSR=4326&size=1024,1024&format=jpg&f=image";
     }
 
     function flyFocus(viewer) {
@@ -916,7 +955,7 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
         ? `<div class="body-row"><strong>Validation terrain</strong>${terrainTile.source.name} remains embedded as source provenance for elevation/bathymetry checks.</div>`
         : "";
       const measuredRow = openGenesisPatchUri
-        ? `<div class="body-row"><strong>Measured tile overlay</strong>Roads, water, buildings, and the tile bounds are drawn directly from the generated Genesis terrain patch so the local measured surface is visible before full photoreal texturing.</div>`
+        ? `<div class="body-row"><strong>Measured map layer</strong>Observed buildings, roads, and water are rendered from the generated local terrain patch with restrained production styling.</div>`
         : "";
       document.getElementById("legend").innerHTML =
         `<div class="body-row"><strong>High-fidelity quality target</strong>This path combines streamed geospatial data, 3D reconstruction, semantic layers, and local simulation overlays.</div>` +
