@@ -690,6 +690,17 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
       viewer.scene.globe.depthTestAgainstTerrain = true;
       viewer.scene.globe.enableLighting = true;
       viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#071522");
+      viewer.scene.highDynamicRange = false;
+      viewer.shadows = false;
+      if (Cesium.DirectionalLight) {
+        viewer.scene.light = new Cesium.DirectionalLight({
+          direction: Cesium.Cartesian3.normalize(
+            new Cesium.Cartesian3(0.35, 0.25, -1.0),
+            new Cesium.Cartesian3()
+          ),
+          intensity: 4.2,
+        });
+      }
       if (openGenesisPatchUri) {
         viewer.scene.globe.show = false;
       }
@@ -706,23 +717,26 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
         }
       }
 
+      let loadedLocalTiles = false;
       if (openTilesetUri) {
         try {
           const localTiles = await Cesium.Cesium3DTileset.fromUrl(openTilesetUri);
-          if (openGenesisPatchUri) {
-            localTiles.show = false;
-          }
           viewer.scene.primitives.add(localTiles);
+          loadedLocalTiles = true;
           document.getElementById("tilesValue").textContent = "Local open 3D Tiles";
+          document.getElementById("terrainValue").textContent = "Textured terrain tile";
         } catch (error) {
           console.warn("Local open 3D Tiles unavailable; using fallback globe.", error);
+          viewer.scene.globe.show = true;
           await addPhotorealisticOrFallback(viewer);
         }
       } else {
         await addPhotorealisticOrFallback(viewer);
       }
 
-      await addMeasuredTileOverlay(viewer);
+      if (!loadedLocalTiles) {
+        await addMeasuredTileOverlay(viewer);
+      }
       if (!openGenesisPatchUri) {
         addGenesisAnchor(viewer);
       }
@@ -958,7 +972,7 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
         ? `<div class="body-row"><strong>Validation terrain</strong>${terrainTile.source.name} remains embedded as source provenance for elevation/bathymetry checks.</div>`
         : "";
       const measuredRow = openGenesisPatchUri
-        ? `<div class="body-row"><strong>Measured map layer</strong>Observed buildings, roads, and water are rendered from the generated local terrain patch with restrained production styling.</div>`
+        ? `<div class="body-row"><strong>Baked local 3D tile</strong>Observed imagery, terrain, roads, water, and buildings are rendered from the generated local tile with provenance kept alongside the Genesis patch.</div>`
         : "";
       document.getElementById("legend").innerHTML =
         `<div class="body-row"><strong>High-fidelity quality target</strong>This path combines streamed geospatial data, 3D reconstruction, semantic layers, and local simulation overlays.</div>` +

@@ -38,6 +38,8 @@ def main() -> None:
         output_root=args.output,
     )
     print(f"Wrote tileset to {result.tile_result.tileset_path}")
+    if result.tile_result.terrain_texture_path is not None:
+        print(f"Wrote terrain imagery to {result.tile_result.terrain_texture_path}")
     print(f"Wrote quality manifest to {result.quality_manifest_path}")
     print(f"Wrote preview manifest to {result.preview_manifest_path}")
     print(f"Mesh metrics: {result.tile_result.metrics}")

@@ -1,12 +1,15 @@
 import json
+import ssl
 import struct
+from urllib.error import URLError
 
-from earth_replica.golden_tile import GoldenTileConfig, build_golden_tile
+import earth_replica.golden_tile as golden_tile
+from earth_replica.golden_tile import GoldenTileConfig, TileImagery, build_golden_tile
 from earth_replica.terrain import TerrainBounds, TerrainSample, TerrainTile
 
 
 def test_golden_tile_pipeline_fetches_measured_sources_and_writes_quality_manifest(tmp_path):
-    calls = {"terrain": 0, "osm": 0}
+    calls = {"terrain": 0, "osm": 0, "imagery": 0}
 
     def fake_fetch_terrain(bounds: TerrainBounds, stride: int, timeout_s: int) -> TerrainTile:
         calls["terrain"] += 1
@@ -87,6 +90,20 @@ def test_golden_tile_pipeline_fetches_measured_sources_and_writes_quality_manife
             land_cover={"urban": 0.4, "vegetation": 0.2, "water": 0.4},
         )
 
+    def fake_fetch_imagery(bounds: TerrainBounds, size_px: int, timeout_s: int) -> TileImagery:
+        calls["imagery"] += 1
+        assert size_px == 1024
+        assert timeout_s == 120
+        assert bounds.min_latitude < bounds.max_latitude
+        return TileImagery(
+            bytes=b"fake-jpeg-bytes",
+            content_type="image/jpeg",
+            source_name="Test orthophoto",
+            source_uri="https://example.test/imagery",
+            license="test imagery license",
+            resolution="1024px test tile",
+        )
+
     result = build_golden_tile(
         GoldenTileConfig(
             center_latitude=37.7749,
@@ -99,10 +116,14 @@ def test_golden_tile_pipeline_fetches_measured_sources_and_writes_quality_manife
         output_root=tmp_path,
         terrain_fetcher=fake_fetch_terrain,
         osm_fetcher=fake_fetch_osm,
+        imagery_fetcher=fake_fetch_imagery,
     )
 
-    assert calls == {"terrain": 1, "osm": 1}
+    assert calls == {"terrain": 1, "osm": 1, "imagery": 1}
     assert result.tile_result.tileset_path.exists()
+    assert result.tile_result.terrain_texture_path is not None
+    assert result.tile_result.terrain_texture_path.exists()
+    assert result.tile_result.terrain_texture_path.read_bytes() == b"fake-jpeg-bytes"
     assert result.quality_manifest_path.exists()
     assert result.preview_manifest_path.exists()
 
@@ -113,6 +134,11 @@ def test_golden_tile_pipeline_fetches_measured_sources_and_writes_quality_manife
     assert quality["source_coverage"]["buildings"]["feature_count"] == 1
     assert quality["source_coverage"]["roads"]["feature_count"] == 1
     assert quality["source_coverage"]["water"]["feature_count"] == 1
+    assert quality["source_coverage"]["imagery"]["state"] == "observed"
+    assert quality["source_coverage"]["imagery"]["source_name"] == "Test orthophoto"
+    assert quality["quality_gate"]["no_debug_colors"] is True
+    assert quality["quality_gate"]["terrain_imagery_draped"] is True
+    assert quality["quality_gate"]["baked_3d_tiles"] is True
     assert quality["physics_readiness"]["genesis_patch_uri"].endswith("genesis-terrain-patch.json")
     assert quality["visual_lod_contract"]["close_range"] == "local 3D Tiles plus Genesis water/soil patch"
 
@@ -120,6 +146,7 @@ def test_golden_tile_pipeline_fetches_measured_sources_and_writes_quality_manife
     assert preview["tileset_uri"].endswith("tileset.json")
     assert preview["provenance_uri"].endswith("provenance.json")
     assert preview["quality_manifest_uri"].endswith("golden-tile-quality.json")
+    assert preview["terrain_texture_uri"].endswith("tile-imagery.jpg")
 
 
 def test_open_tile_glb_uses_distinct_material_primitives_for_physical_layers(tmp_path):
@@ -178,15 +205,46 @@ def test_open_tile_glb_uses_distinct_material_primitives_for_physical_layers(tmp
         roads=(road,),
         water=(water,),
         land_cover={"urban": 0.6, "vegetation": 0.2, "water": 0.2},
+        terrain_texture_uri="tile-imagery.jpg",
     )
 
     gltf = _read_glb_json(result.glb_path.read_bytes())
     primitive_materials = {primitive["material"] for primitive in gltf["meshes"][0]["primitives"]}
     material_names = {material["name"] for material in gltf["materials"]}
+    terrain_primitive = gltf["meshes"][0]["primitives"][0]
+    terrain_material = gltf["materials"][terrain_primitive["material"]]
 
     assert primitive_materials == {0, 1, 2, 3}
     assert material_names >= {"measured terrain", "observed buildings", "observed roads", "observed water"}
+    assert terrain_primitive["attributes"]["TEXCOORD_0"] == 2
+    assert terrain_material["pbrMetallicRoughness"]["baseColorTexture"]["index"] == 0
+    assert terrain_material["extensions"]["KHR_materials_unlit"] == {}
+    assert "KHR_materials_unlit" in gltf["extensionsUsed"]
+    assert gltf["images"][0]["uri"] == "tile-imagery.jpg"
+    assert gltf["textures"][0]["source"] == 0
     assert result.metrics["material_primitives"] == 4
+    assert result.metrics["terrain_textured"] == 1
+
+
+def test_fetch_imagery_falls_back_to_windows_trust_store_for_certificate_errors(monkeypatch):
+    bounds = TerrainBounds(37.77, 37.78, -122.43, -122.41)
+
+    def raise_certificate_error(*_args, **_kwargs):
+        raise URLError(ssl.SSLError("certificate verify failed"))
+
+    monkeypatch.setattr(golden_tile.sys, "platform", "win32")
+    monkeypatch.setattr(golden_tile, "urlopen", raise_certificate_error)
+    monkeypatch.setattr(
+        golden_tile,
+        "_fetch_bytes_with_windows_trust_store",
+        lambda url, timeout_s: b"fallback-jpeg",
+    )
+
+    imagery = golden_tile._fetch_imagery(bounds, 512, 30)
+
+    assert imagery.bytes == b"fallback-jpeg"
+    assert imagery.content_type == "image/jpeg"
+    assert "World_Imagery" in imagery.source_uri
 
 
 def _read_glb_json(glb: bytes) -> dict:

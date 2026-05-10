@@ -340,13 +340,17 @@ def test_render_preview_html_can_link_local_open_tileset(tmp_path):
     assert 'const openTilesetUri = "open/h3_7_872830828ffffff/tileset.json";' in html
     assert 'const openGenesisPatchUri = "open/h3_7_872830828ffffff/genesis-terrain-patch.json";' in html
     assert "Local open 3D Tiles" in html
+    assert "Textured terrain tile" in html
+    assert "DirectionalLight" in html
+    assert "highDynamicRange = false" in html
     assert "openTilesetUri" in html
     assert "addMeasuredTileOverlay" in html
-    assert "Measured tile overlay" in html
+    assert "if (!loadedLocalTiles)" in html
+    assert "Baked local 3D tile" in html
     assert "imageryRectangleUrl" in html
     assert "ImageMaterialProperty" in html
     assert "productionMapStyle" in html
-    assert "localTiles.show = false" in html
+    assert "localTiles.show = false" not in html
     assert "viewer.scene.globe.show = false" in html
     assert "if (!openGenesisPatchUri) {"
     assert "flyFocus(viewer)" in html
