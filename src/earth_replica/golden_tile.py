@@ -18,6 +18,11 @@ from urllib.request import Request, urlopen
 from pathlib import Path
 from typing import Callable
 
+from earth_replica.facade_reconstruction import (
+    FacadeReconstructionResult,
+    LocalFacadeCatalogAdapter,
+    reconstruct_facades,
+)
 from earth_replica.open_data_adapters import (
     OsmContext,
     fetch_osm_context,
@@ -60,6 +65,7 @@ class GoldenTileConfig:
     imagery_size_px: int = 4096
     imagery_timeout_s: int = 120
     overture_buildings_path: Path | None = None
+    facade_catalog_path: Path | None = None
 
     def __post_init__(self) -> None:
         if self.extent_degrees <= 0:
@@ -88,12 +94,14 @@ class GoldenTileResult:
     tile_result: OpenTileResult
     quality_manifest_path: Path
     preview_manifest_path: Path
+    facade_reconstruction_path: Path
 
     def to_record(self) -> dict[str, str]:
         return {
             **self.tile_result.to_record(),
             "quality_manifest_path": str(self.quality_manifest_path),
             "preview_manifest_path": str(self.preview_manifest_path),
+            "facade_reconstruction_path": str(self.facade_reconstruction_path),
         }
 
 
@@ -117,6 +125,12 @@ def build_golden_tile(
     buildings = osm_context.buildings
     if config.overture_buildings_path is not None:
         buildings = load_overture_buildings_from_geoparquet(str(config.overture_buildings_path), bounds)
+    facade_adapters = (
+        (LocalFacadeCatalogAdapter(config.facade_catalog_path),)
+        if config.facade_catalog_path is not None
+        else ()
+    )
+    facade_reconstruction = reconstruct_facades(buildings, adapters=facade_adapters)
 
     request = OpenTileRequest(
         h3_index=config.h3_index,
@@ -143,6 +157,11 @@ def build_golden_tile(
         facade_texture_uri=facade_texture_path.name,
     )
 
+    facade_reconstruction_path = tile_result.root / "facade-reconstruction.json"
+    facade_reconstruction_path.write_text(
+        json.dumps(facade_reconstruction.to_record(), indent=2),
+        encoding="utf-8",
+    )
     quality_manifest_path = tile_result.root / "golden-tile-quality.json"
     quality_manifest_path.write_text(
         json.dumps(
@@ -155,6 +174,8 @@ def build_golden_tile(
                 water=osm_context.water,
                 land_cover=osm_context.land_cover,
                 imagery=imagery,
+                facade_reconstruction=facade_reconstruction,
+                facade_reconstruction_path=facade_reconstruction_path,
             ),
             indent=2,
         ),
@@ -171,6 +192,7 @@ def build_golden_tile(
                 "quality_manifest_uri": quality_manifest_path.name,
                 "terrain_texture_uri": terrain_texture_path.name,
                 "facade_texture_uri": facade_texture_path.name,
+                "facade_reconstruction_uri": facade_reconstruction_path.name,
                 "texture_resolution_px": config.imagery_size_px,
             },
             indent=2,
@@ -181,6 +203,7 @@ def build_golden_tile(
         tile_result=tile_result,
         quality_manifest_path=quality_manifest_path,
         preview_manifest_path=preview_manifest_path,
+        facade_reconstruction_path=facade_reconstruction_path,
     )
 
 
@@ -381,6 +404,8 @@ def _quality_manifest(
     water: tuple[OpenFeature, ...],
     land_cover: dict[str, float],
     imagery: TileImagery,
+    facade_reconstruction: FacadeReconstructionResult,
+    facade_reconstruction_path: Path,
 ) -> dict[str, object]:
     return {
         "schema": "earth-replica/golden-tile-quality/v1",
@@ -413,13 +438,15 @@ def _quality_manifest(
                 else None,
             },
             "building_facades": {
-                "state": "inferred",
+                "state": facade_reconstruction.state,
                 "source_name": "Earth Replica procedural facade atlas",
                 "facade_texture_uri": tile_result.facade_texture_path.name
                 if tile_result.facade_texture_path is not None
                 else None,
-                "observed_feature_count": 0,
-                "inferred_feature_count": tile_result.metrics.get("building_features", 0),
+                "reconstruction_uri": facade_reconstruction_path.name,
+                "observed_feature_count": facade_reconstruction.observed_feature_count,
+                "inferred_feature_count": facade_reconstruction.inferred_feature_count,
+                "source_counts": facade_reconstruction.source_counts,
                 "adapter_slots": ["mapillary", "kartaview", "oblique_imagery"],
             },
             "land_cover": {

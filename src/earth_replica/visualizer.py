@@ -69,6 +69,9 @@ def render_preview_html(
         ).replace(
             "__OPEN_GENESIS_PATCH_URI_JSON__",
             json.dumps(_asset_uri(output_path, _sibling_asset(open_tileset_path, "genesis-terrain-patch.json"))),
+        ).replace(
+            "__OPEN_FACADE_RECONSTRUCTION_URI_JSON__",
+            json.dumps(_asset_uri(output_path, _sibling_asset(open_tileset_path, "facade-reconstruction.json"))),
         )
     output_path.write_text(html, encoding="utf-8")
     return output_path
@@ -646,6 +649,8 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
     const googleMapsApiKey = __GOOGLE_MAPS_API_KEY_JSON__;
     const openTilesetUri = __OPEN_TILESET_URI_JSON__;
     const openGenesisPatchUri = __OPEN_GENESIS_PATCH_URI_JSON__;
+    const openFacadeReconstructionUri = __OPEN_FACADE_RECONSTRUCTION_URI_JSON__;
+    let facadeReconstruction = null;
     const productionMapStyle = {
       tileHeightM: 118,
       roadHeightM: 130,
@@ -740,6 +745,7 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
       if (!openGenesisPatchUri) {
         addGenesisAnchor(viewer);
       }
+      facadeReconstruction = await loadFacadeReconstruction();
       updateLegend();
       if (openGenesisPatchUri) {
         flyFocus(viewer);
@@ -749,6 +755,22 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
 
       document.getElementById("focusButton").addEventListener("click", () => flyFocus(viewer));
       document.getElementById("orbitButton").addEventListener("click", () => flyOrbit(viewer));
+    }
+
+    async function loadFacadeReconstruction() {
+      if (!openFacadeReconstructionUri) {
+        return null;
+      }
+      try {
+        const response = await fetch(openFacadeReconstructionUri, { cache: "no-store" });
+        if (!response.ok) {
+          return null;
+        }
+        return await response.json();
+      } catch (error) {
+        console.warn("Facade reconstruction manifest unavailable.", error);
+        return null;
+      }
     }
 
     async function addPhotorealisticOrFallback(viewer) {
@@ -974,11 +996,15 @@ _CESIUM_HTML_TEMPLATE = r"""<!doctype html>
       const measuredRow = openGenesisPatchUri
         ? `<div class="body-row"><strong>Baked local 3D tile</strong>Observed imagery, terrain, roads, water, and buildings are rendered from the generated local tile with provenance kept alongside the Genesis patch.</div>`
         : "";
+      const facadeRow = facadeReconstruction
+        ? `<div class="body-row"><strong>Facade reconstruction</strong>${Number(facadeReconstruction.observed_feature_count || 0).toLocaleString()} observed facade candidates, ${Number(facadeReconstruction.inferred_feature_count || 0).toLocaleString()} inferred facade fallbacks.</div>`
+        : "";
       document.getElementById("legend").innerHTML =
         `<div class="body-row"><strong>High-fidelity quality target</strong>This path combines streamed geospatial data, 3D reconstruction, semantic layers, and local simulation overlays.</div>` +
         `<div class="body-row"><strong>Photorealistic 3D Tiles path</strong>When a Google Maps API key is present, the viewer attempts Google Photorealistic 3D Tiles. With Cesium ion, it can add Cesium World Terrain and OSM Buildings; otherwise it uses open satellite fallback imagery.</div>` +
         `<div class="body-row"><strong>WGS84 physical frame</strong>Earth radius is kept at ${formatMeters(planetRadiusM)} in simulation metadata; local Genesis effects must be anchored to longitude, latitude, and height.</div>` +
         measuredRow +
+        facadeRow +
         physicsRow +
         terrainRow +
         surfaceSamples.slice(0, 2).map((sample) =>

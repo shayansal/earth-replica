@@ -23,6 +23,12 @@ def main() -> None:
         default=None,
         help="Optional local Overture Buildings GeoParquet file for preferred building footprints.",
     )
+    parser.add_argument(
+        "--facade-catalog",
+        type=Path,
+        default=None,
+        help="Optional local JSON facade candidate catalog keyed by building feature id.",
+    )
     args = parser.parse_args()
 
     result = build_golden_tile(
@@ -34,6 +40,7 @@ def main() -> None:
             extent_degrees=args.extent_degrees,
             terrain_stride=args.terrain_stride,
             overture_buildings_path=args.overture_buildings,
+            facade_catalog_path=args.facade_catalog,
         ),
         output_root=args.output,
     )
@@ -42,6 +49,7 @@ def main() -> None:
         print(f"Wrote terrain imagery to {result.tile_result.terrain_texture_path}")
     if result.tile_result.facade_texture_path is not None:
         print(f"Wrote facade atlas to {result.tile_result.facade_texture_path}")
+    print(f"Wrote facade reconstruction manifest to {result.facade_reconstruction_path}")
     print(f"Wrote quality manifest to {result.quality_manifest_path}")
     print(f"Wrote preview manifest to {result.preview_manifest_path}")
     print(f"Mesh metrics: {result.tile_result.metrics}")

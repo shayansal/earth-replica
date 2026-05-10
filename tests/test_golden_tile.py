@@ -9,6 +9,79 @@ from earth_replica.golden_tile import GoldenTileConfig, TileImagery, build_golde
 from earth_replica.terrain import TerrainBounds, TerrainSample, TerrainTile
 
 
+def test_local_facade_catalog_assigns_observed_candidates_and_inferred_fallback(tmp_path):
+    from earth_replica.facade_reconstruction import LocalFacadeCatalogAdapter, reconstruct_facades
+    from earth_replica.open_tile_pipeline import OpenFeature, ProvenanceRecord
+
+    provenance = ProvenanceRecord(
+        source_id="source:buildings",
+        source_name="OpenStreetMap",
+        domain="buildings",
+        state="observed",
+        license="ODbL",
+        resolution="mapped footprint",
+    )
+    observed_building = OpenFeature(
+        feature_id="building-observed",
+        layer="buildings",
+        geometry=((-122.422, 37.772), (-122.421, 37.772), (-122.421, 37.773), (-122.422, 37.773)),
+        height_m=26.0,
+        provenance=provenance,
+    )
+    inferred_building = OpenFeature(
+        feature_id="building-inferred",
+        layer="buildings",
+        geometry=((-122.424, 37.772), (-122.423, 37.772), (-122.423, 37.773), (-122.424, 37.773)),
+        height_m=8.0,
+        provenance=provenance,
+    )
+    catalog_path = tmp_path / "facades.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "candidates": [
+                    {
+                        "building_id": "building-observed",
+                        "source_name": "Street-level imagery catalog",
+                        "source_uri": "https://example.test/facade-weak.jpg",
+                        "texture_uri": "facades/building-observed-weak.jpg",
+                        "license": "catalog test license",
+                        "confidence": 0.61,
+                        "captured_at": "2026-01-02",
+                    },
+                    {
+                        "building_id": "building-observed",
+                        "source_name": "Street-level imagery catalog",
+                        "source_uri": "https://example.test/facade-strong.jpg",
+                        "texture_uri": "facades/building-observed-strong.jpg",
+                        "license": "catalog test license",
+                        "confidence": 0.91,
+                        "captured_at": "2026-01-03",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = reconstruct_facades(
+        (observed_building, inferred_building),
+        adapters=(LocalFacadeCatalogAdapter(catalog_path),),
+    )
+    record = result.to_record()
+
+    assert record["observed_feature_count"] == 1
+    assert record["inferred_feature_count"] == 1
+    assert record["assignments"][0]["building_id"] == "building-observed"
+    assert record["assignments"][0]["state"] == "observed"
+    assert record["assignments"][0]["source_uri"].endswith("facade-strong.jpg")
+    assert record["assignments"][0]["confidence"] == 0.91
+    assert record["assignments"][1]["building_id"] == "building-inferred"
+    assert record["assignments"][1]["state"] == "inferred"
+    assert record["assignments"][1]["style"] == "low_rise"
+    assert record["source_counts"] == {"Street-level imagery catalog": 1}
+
+
 def test_golden_tile_pipeline_fetches_measured_sources_and_writes_quality_manifest(tmp_path):
     calls = {"terrain": 0, "osm": 0, "imagery": 0}
 
@@ -144,6 +217,7 @@ def test_golden_tile_pipeline_fetches_measured_sources_and_writes_quality_manife
     assert quality["source_coverage"]["building_facades"]["state"] == "inferred"
     assert quality["source_coverage"]["building_facades"]["observed_feature_count"] == 0
     assert quality["source_coverage"]["building_facades"]["facade_texture_uri"] == "facade-atlas.png"
+    assert quality["source_coverage"]["building_facades"]["reconstruction_uri"] == "facade-reconstruction.json"
     assert quality["source_coverage"]["building_facades"]["adapter_slots"] == ["mapillary", "kartaview", "oblique_imagery"]
     assert quality["photorealism_contract"]["terrain_texture"] == "observed orthophoto atlas"
     assert quality["photorealism_contract"]["building_roofs"] == "observed orthophoto atlas"
@@ -161,7 +235,102 @@ def test_golden_tile_pipeline_fetches_measured_sources_and_writes_quality_manife
     assert preview["quality_manifest_uri"].endswith("golden-tile-quality.json")
     assert preview["terrain_texture_uri"].endswith("tile-imagery.jpg")
     assert preview["facade_texture_uri"].endswith("facade-atlas.png")
+    assert preview["facade_reconstruction_uri"].endswith("facade-reconstruction.json")
     assert preview["texture_resolution_px"] == 4096
+
+
+def test_golden_tile_uses_local_facade_catalog_for_observed_facade_provenance(tmp_path):
+    def fake_fetch_terrain(bounds: TerrainBounds, stride: int, timeout_s: int) -> TerrainTile:
+        return TerrainTile(
+            bounds=bounds,
+            stride=stride,
+            samples=(
+                TerrainSample(bounds.min_latitude, bounds.min_longitude, 1.0),
+                TerrainSample(bounds.min_latitude, bounds.max_longitude, 1.0),
+                TerrainSample(bounds.max_latitude, bounds.min_longitude, 1.0),
+                TerrainSample(bounds.max_latitude, bounds.max_longitude, 1.0),
+            ),
+        )
+
+    def fake_fetch_osm(bounds: TerrainBounds, timeout_s: int):
+        from earth_replica.open_data_adapters import OsmContext
+        from earth_replica.open_tile_pipeline import OpenFeature, ProvenanceRecord
+
+        provenance = ProvenanceRecord(
+            source_id="osm:building:facade-test",
+            source_name="OpenStreetMap",
+            domain="buildings",
+            state="observed",
+            license="ODbL",
+            resolution="mapped footprint",
+        )
+        building = OpenFeature(
+            feature_id="osm:building:facade-test",
+            layer="buildings",
+            geometry=(
+                (bounds.min_longitude, bounds.min_latitude),
+                (bounds.max_longitude, bounds.min_latitude),
+                (bounds.max_longitude, bounds.max_latitude),
+                (bounds.min_longitude, bounds.max_latitude),
+            ),
+            height_m=40.0,
+            provenance=provenance,
+        )
+        return OsmContext(buildings=(building,), roads=(), water=(), land_cover={"urban": 1.0})
+
+    def fake_fetch_imagery(bounds: TerrainBounds, size_px: int, timeout_s: int) -> TileImagery:
+        return TileImagery(
+            bytes=b"fake-jpeg-bytes",
+            content_type="image/jpeg",
+            source_name="Test orthophoto",
+            source_uri="https://example.test/imagery",
+            license="test imagery license",
+            resolution="4096px test tile",
+        )
+
+    catalog_path = tmp_path / "facades.json"
+    catalog_path.write_text(
+        json.dumps(
+            {
+                "candidates": [
+                    {
+                        "building_id": "osm:building:facade-test",
+                        "source_name": "Street-level imagery catalog",
+                        "source_uri": "https://example.test/facade.jpg",
+                        "texture_uri": "facades/osm-building-facade-test.jpg",
+                        "license": "catalog test license",
+                        "confidence": 0.82,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = build_golden_tile(
+        GoldenTileConfig(
+            center_latitude=37.7749,
+            center_longitude=-122.4194,
+            h3_index="872830828ffffff",
+            resolution=7,
+            extent_degrees=0.002,
+            facade_catalog_path=catalog_path,
+        ),
+        output_root=tmp_path / "tiles",
+        terrain_fetcher=fake_fetch_terrain,
+        osm_fetcher=fake_fetch_osm,
+        imagery_fetcher=fake_fetch_imagery,
+    )
+
+    quality = json.loads(result.quality_manifest_path.read_text(encoding="utf-8"))
+    preview = json.loads(result.preview_manifest_path.read_text(encoding="utf-8"))
+    facade_manifest = json.loads((result.tile_result.root / preview["facade_reconstruction_uri"]).read_text(encoding="utf-8"))
+
+    assert quality["source_coverage"]["building_facades"]["state"] == "observed"
+    assert quality["source_coverage"]["building_facades"]["observed_feature_count"] == 1
+    assert quality["source_coverage"]["building_facades"]["inferred_feature_count"] == 0
+    assert facade_manifest["assignments"][0]["state"] == "observed"
+    assert facade_manifest["assignments"][0]["texture_uri"] == "facades/osm-building-facade-test.jpg"
 
 
 def test_open_tile_glb_uses_distinct_material_primitives_for_physical_layers(tmp_path):

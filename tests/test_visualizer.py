@@ -312,6 +312,10 @@ def test_render_preview_html_can_link_local_open_tileset(tmp_path):
     tileset_path = tmp_path / "open" / "h3_7_872830828ffffff" / "tileset.json"
     tileset_path.parent.mkdir(parents=True)
     tileset_path.write_text('{"asset":{"version":"1.1"}}', encoding="utf-8")
+    (tileset_path.parent / "facade-reconstruction.json").write_text(
+        '{"observed_feature_count":2,"inferred_feature_count":3}',
+        encoding="utf-8",
+    )
     frames_path.write_text(
         json.dumps(
             {
@@ -339,6 +343,9 @@ def test_render_preview_html_can_link_local_open_tileset(tmp_path):
 
     assert 'const openTilesetUri = "open/h3_7_872830828ffffff/tileset.json";' in html
     assert 'const openGenesisPatchUri = "open/h3_7_872830828ffffff/genesis-terrain-patch.json";' in html
+    assert 'const openFacadeReconstructionUri = "open/h3_7_872830828ffffff/facade-reconstruction.json";' in html
+    assert "Facade reconstruction" in html
+    assert "observed facade candidates" in html
     assert "Local open 3D Tiles" in html
     assert "Textured terrain tile" in html
     assert "DirectionalLight" in html
