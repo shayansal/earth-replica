@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import os
 import ssl
+import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 from dataclasses import dataclass
+from io import BytesIO
 from urllib.parse import urlencode
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -54,7 +57,7 @@ class GoldenTileConfig:
     terrain_stride: int = 1
     terrain_timeout_s: int = 180
     osm_timeout_s: int = 90
-    imagery_size_px: int = 1024
+    imagery_size_px: int = 4096
     imagery_timeout_s: int = 120
     overture_buildings_path: Path | None = None
 
@@ -126,6 +129,8 @@ def build_golden_tile(
     tile_root.mkdir(parents=True, exist_ok=True)
     terrain_texture_path = tile_root / "tile-imagery.jpg"
     terrain_texture_path.write_bytes(imagery.bytes)
+    facade_texture_path = tile_root / "facade-atlas.png"
+    facade_texture_path.write_bytes(_build_facade_atlas_png())
 
     tile_result = OpenTileWorker(output_root=output_root).run(
         request=request,
@@ -135,6 +140,7 @@ def build_golden_tile(
         water=osm_context.water,
         land_cover=osm_context.land_cover,
         terrain_texture_uri=terrain_texture_path.name,
+        facade_texture_uri=facade_texture_path.name,
     )
 
     quality_manifest_path = tile_result.root / "golden-tile-quality.json"
@@ -164,6 +170,8 @@ def build_golden_tile(
                 "genesis_patch_uri": tile_result.genesis_patch_path.name,
                 "quality_manifest_uri": quality_manifest_path.name,
                 "terrain_texture_uri": terrain_texture_path.name,
+                "facade_texture_uri": facade_texture_path.name,
+                "texture_resolution_px": config.imagery_size_px,
             },
             indent=2,
         ),
@@ -186,19 +194,11 @@ def _fetch_osm(bounds: TerrainBounds, timeout_s: int):
 
 def _fetch_imagery(bounds: TerrainBounds, size_px: int, timeout_s: int) -> TileImagery:
     source_uri = _esri_imagery_export_url(bounds, size_px)
-    request = Request(
-        source_uri,
-        headers={"User-Agent": USER_AGENT},
-    )
-    try:
-        with urlopen(request, timeout=timeout_s) as response:
-            image_bytes = response.read()
-            content_type = response.headers.get_content_type() or "image/jpeg"
-    except URLError as exc:
-        if sys.platform != "win32" or not _is_certificate_error(exc):
-            raise
-        image_bytes = _fetch_bytes_with_windows_trust_store(source_uri, timeout_s)
+    if size_px > 2048:
+        image_bytes = _fetch_imagery_mosaic(bounds, size_px, timeout_s)
         content_type = "image/jpeg"
+    else:
+        image_bytes, content_type = _fetch_image_bytes(source_uri, timeout_s)
     return TileImagery(
         bytes=image_bytes,
         content_type=content_type,
@@ -206,6 +206,52 @@ def _fetch_imagery(bounds: TerrainBounds, size_px: int, timeout_s: int) -> TileI
         source_uri=source_uri,
         license="Attribution and redistribution terms require review before publishing derived tiles",
         resolution=f"{size_px}px orthophoto tile",
+    )
+
+
+def _fetch_image_bytes(source_uri: str, timeout_s: int) -> tuple[bytes, str]:
+    request = Request(
+        source_uri,
+        headers={"User-Agent": USER_AGENT},
+    )
+    try:
+        with urlopen(request, timeout=timeout_s) as response:
+            return response.read(), response.headers.get_content_type() or "image/jpeg"
+    except URLError as exc:
+        if sys.platform != "win32" or not _is_certificate_error(exc):
+            raise
+        return _fetch_bytes_with_windows_trust_store(source_uri, timeout_s), "image/jpeg"
+
+
+def _fetch_imagery_mosaic(bounds: TerrainBounds, size_px: int, timeout_s: int) -> bytes:
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("Pillow is required for tiled high-resolution imagery mosaics") from exc
+
+    half_size = size_px // 2
+    image = Image.new("RGB", (half_size * 2, half_size * 2))
+    quadrants = _quadrant_bounds(bounds)
+    offsets = ((0, 0), (half_size, 0), (0, half_size), (half_size, half_size))
+    for quadrant, offset in zip(quadrants, offsets):
+        quadrant_uri = _esri_imagery_export_url(quadrant, half_size)
+        payload, _content_type = _fetch_image_bytes(quadrant_uri, timeout_s)
+        tile = Image.open(BytesIO(payload)).convert("RGB")
+        image.paste(tile.resize((half_size, half_size)), offset)
+
+    output = BytesIO()
+    image.save(output, format="JPEG", quality=92, optimize=True)
+    return output.getvalue()
+
+
+def _quadrant_bounds(bounds: TerrainBounds) -> tuple[TerrainBounds, TerrainBounds, TerrainBounds, TerrainBounds]:
+    mid_latitude = (bounds.min_latitude + bounds.max_latitude) / 2
+    mid_longitude = (bounds.min_longitude + bounds.max_longitude) / 2
+    return (
+        TerrainBounds(mid_latitude, bounds.max_latitude, bounds.min_longitude, mid_longitude),
+        TerrainBounds(mid_latitude, bounds.max_latitude, mid_longitude, bounds.max_longitude),
+        TerrainBounds(bounds.min_latitude, mid_latitude, bounds.min_longitude, mid_longitude),
+        TerrainBounds(bounds.min_latitude, mid_latitude, mid_longitude, bounds.max_longitude),
     )
 
 
@@ -270,6 +316,40 @@ def _esri_imagery_export_url(bounds: TerrainBounds, size_px: int) -> str:
     return f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export?{query}"
 
 
+def _build_facade_atlas_png(width: int = 256, height: int = 256) -> bytes:
+    rows = []
+    for y in range(height):
+        row = bytearray([0])
+        for x in range(width):
+            panel = (x // 32) % 4
+            floor = (y // 28) % 6
+            mortar = x % 32 in {0, 31} or y % 28 in {0, 27}
+            window = 7 <= x % 32 <= 22 and 7 <= y % 28 <= 19
+            if mortar:
+                color = (116, 121, 118)
+            elif window:
+                shade = 50 + panel * 9 + floor * 3
+                color = (shade, shade + 10, shade + 18)
+            else:
+                base = 158 + panel * 8 - floor * 2
+                color = (base, base + 2, base - 3)
+            row.extend(color)
+        rows.append(bytes(row))
+    raw = b"".join(rows)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + _png_chunk(b"IDAT", zlib.compress(raw, level=9))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
+    checksum = zlib.crc32(chunk_type)
+    checksum = zlib.crc32(data, checksum)
+    return struct.pack(">I", len(data)) + chunk_type + data + struct.pack(">I", checksum & 0xFFFFFFFF)
+
+
 def _quality_manifest(
     *,
     config: GoldenTileConfig,
@@ -321,6 +401,13 @@ def _quality_manifest(
             "regional_range": "streamed DEM with vector context",
             "close_range": "local 3D Tiles plus Genesis water/soil patch",
         },
+        "photorealism_contract": {
+            "terrain_texture": "observed orthophoto atlas",
+            "building_roofs": "observed orthophoto atlas",
+            "building_facades": "procedural inferred facade atlas until facade imagery is available",
+            "water": "PBR material with observed polygon mask",
+            "scale_path": "same worker contract can be applied independently to every global tile",
+        },
         "physics_readiness": {
             "engine": "Genesis",
             "activation": "near-camera local patch only",
@@ -333,6 +420,7 @@ def _quality_manifest(
             "aligned_imagery_roads_buildings_water": True,
             "realistic_camera_view": True,
             "terrain_imagery_draped": tile_result.metrics.get("terrain_textured", 0) == 1,
+            "roof_imagery_draped": tile_result.metrics.get("roof_textured", 0) == 1,
             "baked_3d_tiles": True,
             "pbr_water_material": True,
             "material_classes": ["soil", "asphalt", "concrete", "vegetation", "roof", "water", "exposed_ground"],

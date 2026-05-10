@@ -118,6 +118,7 @@ class OpenTileResult:
     genesis_patch_path: Path
     metrics: dict[str, int]
     terrain_texture_path: Path | None = None
+    facade_texture_path: Path | None = None
 
     def to_record(self) -> dict[str, str]:
         record = {
@@ -129,6 +130,8 @@ class OpenTileResult:
         }
         if self.terrain_texture_path is not None:
             record["terrain_texture_path"] = str(self.terrain_texture_path)
+        if self.facade_texture_path is not None:
+            record["facade_texture_path"] = str(self.facade_texture_path)
         return record
 
 
@@ -148,6 +151,7 @@ class OpenTileWorker:
         water: tuple[OpenFeature, ...] = (),
         land_cover: dict[str, float] | None = None,
         terrain_texture_uri: str | None = None,
+        facade_texture_uri: str | None = None,
     ) -> OpenTileResult:
         tile_root = self.output_root / request.tile_id
         tile_root.mkdir(parents=True, exist_ok=True)
@@ -157,9 +161,21 @@ class OpenTileWorker:
         provenance_path = tile_root / "provenance.json"
         genesis_patch_path = tile_root / "genesis-terrain-patch.json"
         terrain_texture_path = tile_root / terrain_texture_uri if terrain_texture_uri else None
+        facade_texture_path = tile_root / facade_texture_uri if facade_texture_uri else None
 
         mesh_metrics: dict[str, int] = {}
-        glb_path.write_bytes(_build_glb(request, terrain, buildings, roads, water, mesh_metrics, terrain_texture_uri))
+        glb_path.write_bytes(
+            _build_glb(
+                request,
+                terrain,
+                buildings,
+                roads,
+                water,
+                mesh_metrics,
+                terrain_texture_uri,
+                facade_texture_uri,
+            )
+        )
         tileset_path.write_text(
             json.dumps(_build_tileset_record(request, terrain), indent=2),
             encoding="utf-8",
@@ -192,6 +208,7 @@ class OpenTileWorker:
                 "water_features": len(water),
             },
             terrain_texture_path=terrain_texture_path,
+            facade_texture_path=facade_texture_path,
         )
 
 
@@ -362,6 +379,7 @@ def _build_glb(
     water: tuple[OpenFeature, ...],
     metrics: dict[str, int],
     terrain_texture_uri: str | None = None,
+    facade_texture_uri: str | None = None,
 ) -> bytes:
     builder = _MeshBuilder(request)
     builder.add_terrain(terrain)
@@ -376,7 +394,9 @@ def _build_glb(
     metrics["triangles"] = sum(len(indices) for indices in builder.primitive_indices.values()) // 3
     metrics["material_primitives"] = sum(1 for indices in builder.primitive_indices.values() if indices)
     metrics["terrain_textured"] = 1 if terrain_texture_uri else 0
-    return builder.to_glb(terrain_texture_uri=terrain_texture_uri)
+    metrics["roof_textured"] = 1 if terrain_texture_uri and builder.primitive_indices.get(4) else 0
+    metrics["facade_textured"] = 1 if facade_texture_uri and builder.primitive_indices.get(1) else 0
+    return builder.to_glb(terrain_texture_uri=terrain_texture_uri, facade_texture_uri=facade_texture_uri)
 
 
 class _MeshBuilder:
@@ -390,6 +410,7 @@ class _MeshBuilder:
             1: [],
             2: [],
             3: [],
+            4: [],
         }
         self.terrain_vertices = 0
 
@@ -424,12 +445,15 @@ class _MeshBuilder:
     def add_building(self, feature: OpenFeature) -> None:
         if len(feature.geometry) < 3:
             return
-        base = [self._local(lon, lat, 0.1) for lon, lat in feature.geometry[:4]]
+        footprint = feature.geometry[:4]
+        base = [self._local(lon, lat, 0.1) for lon, lat in footprint]
         if len(base) == 3:
             base.append(base[-1])
+            footprint = (*footprint, footprint[-1])
         top = [(x, y, z + max(feature.height_m, 3.0)) for x, y, z in base]
         self._add_quad(base, material_index=1)
-        self._add_quad(list(reversed(top)), material_index=1)
+        roof_texcoords = [_terrain_uv(self.request.bounds, lon, lat) for lon, lat in footprint]
+        self._add_quad(list(reversed(top)), material_index=4, texcoords=list(reversed(roof_texcoords)))
         for index in range(4):
             self._add_quad([
                 base[index],
@@ -465,11 +489,17 @@ class _MeshBuilder:
             points.append(points[-1])
         self._add_quad(points, material_index=3)
 
-    def _add_quad(self, points: list[tuple[float, float, float]], material_index: int) -> None:
+    def _add_quad(
+        self,
+        points: list[tuple[float, float, float]],
+        material_index: int,
+        texcoords: list[tuple[float, float]] | None = None,
+    ) -> None:
         normal = _normal(points[0], points[1], points[2])
         start = len(self.positions)
-        for point in points:
-            self._add_vertex(point, normal)
+        quad_texcoords = texcoords or [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        for point, texcoord in zip(points, quad_texcoords):
+            self._add_vertex(point, normal, texcoord)
         self.primitive_indices[material_index].extend([start, start + 1, start + 2, start, start + 2, start + 3])
 
     def _add_vertex(
@@ -490,7 +520,7 @@ class _MeshBuilder:
         north = (latitude - self.request.center_latitude) * meters_per_degree_lat
         return (east, north, z_m)
 
-    def to_glb(self, terrain_texture_uri: str | None = None) -> bytes:
+    def to_glb(self, terrain_texture_uri: str | None = None, facade_texture_uri: str | None = None) -> bytes:
         position_bytes = b"".join(struct.pack("<3f", *value) for value in self.positions)
         normal_bytes = b"".join(struct.pack("<3f", *value) for value in self.normals)
         texcoord_bytes = b"".join(struct.pack("<2f", *value) for value in self.texcoords)
@@ -568,22 +598,32 @@ class _MeshBuilder:
                     "material": material_index,
                 }
             )
+        terrain_texture_index = 0 if terrain_texture_uri else None
+        facade_texture_index = (1 if terrain_texture_uri else 0) if facade_texture_uri else None
         gltf = {
             "asset": {"version": "2.0", "generator": "earth-replica-open-tile-worker"},
             "scene": 0,
             "scenes": [{"nodes": [0]}],
             "nodes": [{"mesh": 0}],
             "meshes": [{"primitives": primitives}],
-            "materials": _gltf_materials(terrain_texture_uri),
+            "materials": _gltf_materials(terrain_texture_index, facade_texture_index),
             "buffers": [{"byteLength": len(binary)}],
             "bufferViews": buffer_views,
             "accessors": accessors,
         }
-        if terrain_texture_uri:
+        if terrain_texture_uri or facade_texture_uri:
             gltf["extensionsUsed"] = ["KHR_materials_unlit"]
-            gltf["images"] = [{"uri": terrain_texture_uri}]
             gltf["samplers"] = [{"magFilter": 9729, "minFilter": 9987, "wrapS": 33071, "wrapT": 33071}]
-            gltf["textures"] = [{"source": 0, "sampler": 0}]
+            images = []
+            textures = []
+            if terrain_texture_uri:
+                images.append({"uri": terrain_texture_uri})
+                textures.append({"source": 0, "sampler": 0})
+            if facade_texture_uri:
+                images.append({"uri": facade_texture_uri})
+                textures.append({"source": len(images) - 1, "sampler": 0})
+            gltf["images"] = images
+            gltf["textures"] = textures
         json_chunk = _pad4(json.dumps(gltf, separators=(",", ":")).encode("utf-8"), pad_byte=b" ")
         bin_chunk = _pad4(binary)
         total_length = 12 + 8 + len(json_chunk) + 8 + len(bin_chunk)
@@ -618,29 +658,39 @@ def _terrain_uv(bounds: TerrainBounds, longitude: float, latitude: float) -> tup
     return (max(0.0, min(1.0, u)), max(0.0, min(1.0, v)))
 
 
-def _gltf_materials(terrain_texture_uri: str | None = None) -> list[dict[str, object]]:
+def _gltf_materials(
+    terrain_texture_index: int | None = None,
+    facade_texture_index: int | None = None,
+) -> list[dict[str, object]]:
     terrain_pbr: dict[str, object] = {
         "baseColorFactor": [0.46, 0.56, 0.36, 1.0],
         "roughnessFactor": 0.92,
     }
-    if terrain_texture_uri:
+    if terrain_texture_index is not None:
         terrain_pbr = {
-            "baseColorTexture": {"index": 0},
+            "baseColorTexture": {"index": terrain_texture_index},
             "roughnessFactor": 0.95,
+            "metallicFactor": 0.0,
+        }
+    facade_pbr: dict[str, object] = {
+        "baseColorFactor": [0.64, 0.66, 0.62, 1.0],
+        "roughnessFactor": 0.84,
+    }
+    if facade_texture_index is not None:
+        facade_pbr = {
+            "baseColorTexture": {"index": facade_texture_index},
+            "roughnessFactor": 0.88,
             "metallicFactor": 0.0,
         }
     return [
         {
             "name": "measured terrain",
             "pbrMetallicRoughness": terrain_pbr,
-            **({"extensions": {"KHR_materials_unlit": {}}} if terrain_texture_uri else {}),
+            **({"extensions": {"KHR_materials_unlit": {}}} if terrain_texture_index is not None else {}),
         },
         {
-            "name": "observed buildings",
-            "pbrMetallicRoughness": {
-                "baseColorFactor": [0.72, 0.74, 0.72, 1.0],
-                "roughnessFactor": 0.78,
-            },
+            "name": "inferred building facades",
+            "pbrMetallicRoughness": facade_pbr,
         },
         {
             "name": "observed roads",
@@ -658,6 +708,11 @@ def _gltf_materials(terrain_texture_uri: str | None = None) -> list[dict[str, ob
             },
             "alphaMode": "BLEND",
             "doubleSided": True,
+        },
+        {
+            "name": "observed building roofs",
+            "pbrMetallicRoughness": terrain_pbr,
+            **({"extensions": {"KHR_materials_unlit": {}}} if terrain_texture_index is not None else {}),
         },
     ]
 
